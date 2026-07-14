@@ -31,57 +31,71 @@ jobs:
           END=$(( $(date +%s) + 21500 ))
           while [ $(date +%s) -lt $END ]; do
             UPDATES=$(curl -s --max-time 30 "https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?offset=${OFFSET}&timeout=25" 2>/dev/null)
-            echo "$UPDATES" | jq -r '.result[]? | [.update_id, (.message.chat.id // ""), (.message.text // "")] | join("|")' 2>/dev/null | while IFS='|' read -r uid chat text; do
-              [ -z "$chat" ] && continue
-              [ "$chat" != "$CHAT_ID" ] && continue
-              tl=$(echo "$text" | tr '[:upper:]' '[:lower:]')
+            COUNT=$(echo "$UPDATES" | jq '.result | length' 2>/dev/null)
+            if [ "$COUNT" -gt 0 ] 2>/dev/null; then
+              echo "[$(date +%H:%M:%S)] $COUNT updates"
+              echo "$UPDATES" | jq -r '.result[]? | [.update_id, (.message.chat.id // ""), (.message.text // "")] | join("|")' 2>/dev/null | while IFS='|' read -r uid chat text; do
+                [ -z "$chat" ] && continue
+                [ "$chat" != "$CHAT_ID" ] && continue
+                tl=$(echo "$text" | tr '[:upper:]' '[:lower:]')
+                echo "[$(date +%H:%M:%S)] cmd: $tl"
 
-              # Fetch latest frame from state branch (works for private repos)
-              FRAME=/tmp/recorder-state/last_frame.jpg
-              rm -f "$FRAME"
-              bash ./state-fetch.sh last_frame.jpg "$FRAME" 2>/dev/null || true
-              [ -s "$FRAME" ] || FRAME=""
+                # Try to fetch frame (non-blocking, 5s max)
+                FRAME=/tmp/recorder-state/last_frame.jpg
+                rm -f "$FRAME"
+                timeout 5 bash ./state-fetch.sh last_frame.jpg "$FRAME" 2>/dev/null || FRAME=""
+                if [ -s "$FRAME" ]; then
+                  echo "  frame: OK $(stat -c%s "$FRAME") bytes"
+                else
+                  FRAME=""
+                fi
 
-              case "$tl" in
-                /status|status)
-                  jk_data=$(curl -s --max-time 8 "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null)
-                  jk=$(echo "$jk_data" | jq -r '.models[0] | if .stream.online then "online (\(.viewersCount))" else "offline" end' 2>/dev/null)
-                  r="JustKatrin: ${jk:-offline} | moonmaiden: offline"
-                  curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" -d "chat_id=${chat}" --data-urlencode "text=${r}" 2>/dev/null >/dev/null
-                  if [ -n "$FRAME" ] && [ -f "$FRAME" ]; then
-                    curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
-                      -F "chat_id=${chat}" -F "photo=@${FRAME}" \
-                      -F "caption=последний кадр записи" 2>/dev/null >/dev/null
-                  fi
-                  ;;
-                /models|models)
-                  r="JustKatrin, moonmaiden"
-                  curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" -d "chat_id=${chat}" --data-urlencode "text=${r}" 2>/dev/null >/dev/null
-                  if [ -n "$FRAME" ] && [ -f "$FRAME" ]; then
-                    curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
-                      -F "chat_id=${chat}" -F "photo=@${FRAME}" \
-                      -F "caption=последний кадр записи" 2>/dev/null >/dev/null
-                  fi
-                  ;;
-                /last|last)
-                  r="записей пока нет"
-                  curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" -d "chat_id=${chat}" --data-urlencode "text=${r}" 2>/dev/null >/dev/null
-                  if [ -n "$FRAME" ] && [ -f "$FRAME" ]; then
-                    curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
-                      -F "chat_id=${chat}" -F "photo=@${FRAME}" \
-                      -F "caption=последний кадр записи" 2>/dev/null >/dev/null
-                  fi
-                  ;;
-                /help|help|/start|start)
-                  r="/status /models /last /help"
-                  curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" -d "chat_id=${chat}" --data-urlencode "text=${r}" 2>/dev/null >/dev/null
-                  ;;
-                *)
-                  curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" -d "chat_id=${chat}" --data-urlencode "text=?" 2>/dev/null >/dev/null
-                  ;;
-              esac
-              echo "$uid" > /tmp/recorder-state/listener_offset
-            done
+                case "$tl" in
+                  /status|status)
+                    jk_data=$(curl -s --max-time 5 "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null)
+                    jk=$(echo "$jk_data" | jq -r '.models[0] | if .stream.online then "online (\(.viewersCount))" else "offline" end' 2>/dev/null)
+                    r="JustKatrin: ${jk:-offline} | moonmaiden: offline"
+                    echo "  send: $r"
+                    curl -s --max-time 8 "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" -d "chat_id=${chat}" --data-urlencode "text=${r}" 2>/dev/null
+                    if [ -n "$FRAME" ] && [ -f "$FRAME" ]; then
+                      curl -s --max-time 8 "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
+                        -F "chat_id=${chat}" -F "photo=@${FRAME}" \
+                        -F "caption=последний кадр записи" 2>/dev/null
+                    fi
+                    ;;
+                  /models|models)
+                    r="JustKatrin, moonmaiden"
+                    echo "  send: $r"
+                    curl -s --max-time 8 "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" -d "chat_id=${chat}" --data-urlencode "text=${r}" 2>/dev/null
+                    if [ -n "$FRAME" ] && [ -f "$FRAME" ]; then
+                      curl -s --max-time 8 "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
+                        -F "chat_id=${chat}" -F "photo=@${FRAME}" \
+                        -F "caption=последний кадр записи" 2>/dev/null
+                    fi
+                    ;;
+                  /last|last)
+                    r="записей пока нет"
+                    echo "  send: $r"
+                    curl -s --max-time 8 "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" -d "chat_id=${chat}" --data-urlencode "text=${r}" 2>/dev/null
+                    if [ -n "$FRAME" ] && [ -f "$FRAME" ]; then
+                      curl -s --max-time 8 "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
+                        -F "chat_id=${chat}" -F "photo=@${FRAME}" \
+                        -F "caption=последний кадр записи" 2>/dev/null
+                    fi
+                    ;;
+                  /help|help|/start|start)
+                    r="/status /models /last /help"
+                    echo "  send: $r"
+                    curl -s --max-time 8 "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" -d "chat_id=${chat}" --data-urlencode "text=${r}" 2>/dev/null
+                    ;;
+                  *)
+                    echo "  send: ?"
+                    curl -s --max-time 8 "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" -d "chat_id=${chat}" --data-urlencode "text=?" 2>/dev/null
+                    ;;
+                esac
+                echo "$uid" > /tmp/recorder-state/listener_offset
+              done
+            fi
             [ -f /tmp/recorder-state/listener_offset ] && OFFSET=$(($(cat /tmp/recorder-state/listener_offset) + 1))
             echo "$OFFSET" > /tmp/recorder-state/listener_offset
           done
