@@ -42,33 +42,41 @@ jobs:
 
           echo "[$(date -u +%H:%M:%S)] START listener boot"
 
-          # Read offset — prefer the COMMITTED ./listener_offset file
-          # (which survives across runner restarts); fall back to the
-          # local /tmp copy; if neither exists, ask Telegram for the
-          # current highest update_id and start from there + 1 to skip
-          # any backlog.
+          # STEP 1: always peek Telegram to find the current highest
+          # update_id. This tells us what Telegram has in queue right now.
+          PEEK=$(curl -s --max-time 10 "https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?timeout=0" 2>/dev/null || echo '{"ok":false,"result":[]}')
+          PEEK_ID=$(printf '%s' "$PEEK" | jq -r '[.result[].update_id] | (max // 0)' 2>/dev/null)
+          LATEST=0
+          if [ -n "$PEEK_ID" ] && [ "$PEEK_ID" -ge 0 ] 2>/dev/null; then
+            LATEST="$PEEK_ID"
+          fi
+          echo "[$(date -u +%H:%M:%S)] Telegram latest update_id in queue: $LATEST"
+
+          # STEP 2: read committed offset (preferred — survives restarts)
           OFFSET=0
           if [ -f ./listener_offset ]; then
             OFFSET=$(cat ./listener_offset 2>/dev/null | tr -d '[:space:]')
-            echo "[$(date -u +%H:%M:%S)] using committed offset: $OFFSET"
-          elif [ -f /tmp/recorder-state/listener_offset ]; then
-            OFFSET=$(cat /tmp/recorder-state/listener_offset 2>/dev/null | tr -d '[:space:]')
-            echo "[$(date -u +%H:%M:%S)] using local offset: $OFFSET"
+            [ -z "$OFFSET" ] && OFFSET=0
+            echo "[$(date -u +%H:%M:%S)] committed offset: $OFFSET"
           fi
-          # If still 0 (no committed file), peek Telegram for latest
-          # update_id and skip everything in queue.
+
+          # STEP 3: sanity-check the offset.
+          # A) no offset / invalid → LATEST+1 (skip all backlog)
+          # B) offset >> LATEST+100 (e.g. 9999999999 "skip" sentinel or
+          #    stale from old run) → reset to LATEST+1 so new msgs flow
+          # C) offset in (0, LATEST+1] → keep it (normal continuation)
+          SANE_MAX=$((LATEST + 1))
           if [ "${OFFSET:-0}" = "0" ] || ! [ "${OFFSET:-0}" -ge 0 ] 2>/dev/null; then
-            PEEK=$(curl -s --max-time 10 "https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?timeout=0" 2>/dev/null || echo '{"ok":false,"result":[]}')
-            PEEK_ID=$(printf '%s' "$PEEK" | jq -r '[.result[].update_id] | (max // 0)' 2>/dev/null)
-            if [ -n "$PEEK_ID" ] && [ "$PEEK_ID" -ge 0 ] 2>/dev/null; then
-              OFFSET=$((PEEK_ID + 1))
-              echo "[$(date -u +%H:%M:%S)] peeked latest update_id=$PEEK_ID, setting OFFSET=$OFFSET (skip backlog)"
-            else
-              OFFSET=0
-              echo "[$(date -u +%H:%M:%S)] no updates in queue, OFFSET=0"
-            fi
+            OFFSET=$SANE_MAX
+            echo "[$(date -u +%H:%M:%S)] no valid saved offset → OFFSET=$OFFSET (skip backlog)"
+          elif [ "${OFFSET:-0}" -gt $((SANE_MAX + 100)) ] 2>/dev/null; then
+            OLD=$OFFSET
+            OFFSET=$SANE_MAX
+            echo "[$(date -u +%H:%M:%S)] saved offset $OLD is > LATEST+100 (sentinel/stale) → reset OFFSET=$OFFSET"
+          else
+            echo "[$(date -u +%H:%M:%S)] using saved offset: $OFFSET"
           fi
-          echo "[$(date -u +%H:%M:%S)] final offset=$OFFSET"
+          echo "[$(date -u +%H:%M:%S)] final offset=$OFFSET (LATEST=$LATEST)"
           # Persist immediately so a crash here still saves state
           mkdir -p /tmp/recorder-state
           echo "$OFFSET" > /tmp/recorder-state/listener_offset
