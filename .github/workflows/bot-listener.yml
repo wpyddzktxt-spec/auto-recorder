@@ -1,9 +1,8 @@
 name: Bot Listener (Fast Response)
 on:
   workflow_dispatch:
-  workflow_run:
-    workflows: ["Bot Listener (Fast Response)"]
-    types: [completed]
+  schedule:
+    - cron: '*/6 * * * *'
 
 jobs:
   listen:
@@ -31,9 +30,9 @@ jobs:
               tl=$(echo "$text" | tr '[:upper:]' '[:lower:]')
               case "$tl" in
                 /status|status)
-                  jk=$(curl -s --max-time 8 "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null | jq -r '.models[0] | if .stream.online then "🟢 online (\(.viewersCount))" else "🔴 оффлайн" end' 2>/dev/null)
-                  r="JustKatrin: ${jk:-🔴 оффлайн}
-moonmaiden: 🔴 оффлайн" ;;
+                  jk=$(curl -s --max-time 8 "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null | jq -r '.models[0] | if .stream.online then "online (\(.viewersCount))" else "оффлайн" end' 2>/dev/null)
+                  r="JustKatrin: ${jk:-оффлайн}
+moonmaiden: оффлайн" ;;
                 /models|models) r="JustKatrin, moonmaiden" ;;
                 /last|last) r="записей пока нет" ;;
                 /help|help|/start|start) r="/status /models /last /help" ;;
