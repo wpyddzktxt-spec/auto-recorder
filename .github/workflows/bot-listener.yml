@@ -87,8 +87,76 @@ jobs:
           echo "[$(date -u +%H:%M:%S)] end=$END"
 
           ITER=0
+          # ---- Model monitor tick (every MONITOR_TICK iterations ≈ 5 min) ----
+          MONITOR_TICK=12        # 12 × 25s = 5 min
+          LAST_MONITOR=0
+          CHECK_STATE_FILE=/tmp/recorder-state/check_state.json
           while [ "$(date +%s)" -lt "$END" ]; do
             ITER=$((ITER + 1))
+            # ---- monitor tick: detect online/offline transitions ----
+            if [ $((ITER % MONITOR_TICK)) -eq 1 ] || [ "$ITER" = "1" ]; then
+              NOW_TS=$(date +%s)
+              if [ $((NOW_TS - LAST_MONITOR)) -ge 280 ]; then
+                LAST_MONITOR=$NOW_TS
+                echo "[$(date -u +%H:%M:%S)] MONITOR tick"
+                # Load previous state (cross-runner) from 'state' branch
+                PREV_STATE='{"JustKatrin":"offline","moonmaiden":"offline"}'
+                if timeout 5 bash ./state-fetch.sh check_state.json "$CHECK_STATE_FILE" >/dev/null 2>&1 && [ -s "$CHECK_STATE_FILE" ]; then
+                  PREV_STATE=$(cat "$CHECK_STATE_FILE")
+                fi
+                PREV_JK=$(echo "$PREV_STATE" | jq -r '.JustKatrin // "offline"' 2>/dev/null)
+                # Query current JustKatrin status
+                JK_DATA=$(curl -s --max-time 8 "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null || echo "")
+                CUR_JK="offline"
+                JK_URL=""
+                if [ -n "$JK_DATA" ]; then
+                  ONLINE=$(echo "$JK_DATA" | jq -r 'if (.count // 0) > 0 and .models[0].stream.url != null then "online" else "offline" end' 2>/dev/null)
+                  CUR_JK="$ONLINE"
+                  JK_URL=$(echo "$JK_DATA" | jq -r '.models[0].stream.url // ""' 2>/dev/null)
+                fi
+                VIEWERS=$(echo "$JK_DATA" | jq -r '.models[0].viewersCount // 0' 2>/dev/null)
+                echo "[$(date -u +%H:%M:%S)]   JustKatrin: prev=$PREV_JK cur=$CUR_JK viewers=$VIEWERS"
+                # Transition offline -> online
+                if [ "$CUR_JK" = "online" ] && [ "$PREV_JK" != "online" ]; then
+                  echo "[$(date -u +%H:%M:%S)]   TRANSITION offline->online — notify + dispatch record"
+                  # Extract a fresh preview from HLS
+                  PREVIEW_FILE=/tmp/recorder-state/preview_JustKatrin.jpg
+                  rm -f "$PREVIEW_FILE"
+                  if [ -n "$JK_URL" ]; then
+                    timeout 20 ffmpeg -y -i "$JK_URL" -frames:v 1 -q:v 3 -ss 2 -vf "scale=480:-1" "$PREVIEW_FILE" 2>/dev/null || true
+                    if [ -s "$PREVIEW_FILE" ]; then
+                      cp -f "$PREVIEW_FILE" /tmp/recorder-state/last_frame.jpg
+                      bash ./state-store.sh "$PREVIEW_FILE" "last_frame.jpg" "preview update" >/dev/null 2>&1 || true
+                      curl -s --max-time 15 "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
+                        -F "chat_id=${CHAT_ID}" -F "photo=@${PREVIEW_FILE}" \
+                        -F "caption=🟢 JustKatrin online (${VIEWERS} зр.)" 2>/dev/null >/dev/null || true
+                    else
+                      curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+                        -d "chat_id=${CHAT_ID}" --data-urlencode "text=🟢 JustKatrin online (${VIEWERS} зр.)" 2>/dev/null >/dev/null
+                    fi
+                  fi
+                  # Dispatch record
+                  if [ -n "$JK_URL" ] && [ -n "${GITHUB_TOKEN:-}" ]; then
+                    PAYLOAD=$(jq -n --arg m "JustKatrin" --arg p "stripchat" --arg h "$JK_URL" --arg r "main" \
+                      '{ref:$r, inputs:{model:$m, provider:$p, hls_url:$h}}')
+                    curl -s -X POST -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                      -H "Accept: application/vnd.github+json" \
+                      "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/record.yml/dispatches" \
+                      -d "$PAYLOAD" 2>/dev/null >/dev/null && echo "  record dispatched"
+                  fi
+                fi
+                # Transition online -> offline
+                if [ "$CUR_JK" = "offline" ] && [ "$PREV_JK" = "online" ]; then
+                  echo "[$(date -u +%H:%M:%S)]   TRANSITION online->offline"
+                  curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+                    -d "chat_id=${CHAT_ID}" --data-urlencode "text=🔴 JustKatrin offline" 2>/dev/null >/dev/null
+                fi
+                # Persist state
+                NEW_STATE=$(echo "$PREV_STATE" | jq -c --arg jk "$CUR_JK" '.JustKatrin = $jk' 2>/dev/null || echo "$PREV_STATE")
+                echo "$NEW_STATE" > "$CHECK_STATE_FILE"
+                bash ./state-store.sh "$CHECK_STATE_FILE" "check_state.json" "check state" >/dev/null 2>&1 || true
+              fi
+            fi
             # Long-poll for up to 25s
             RAW=$(curl -s --max-time 30 "https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?offset=${OFFSET}&timeout=25" 2>/dev/null || echo '{"ok":false,"result":[]}')
 
