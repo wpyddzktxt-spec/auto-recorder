@@ -22,7 +22,7 @@ publish_frame() {
     local frame="$1"
     [ -f "$frame" ] || return 1
     cp -f "$frame" "${STATE_DIR}/last_frame.jpg" 2>/dev/null || true
-    if [ -n "${GH_TOKEN:-}" ]; then
+    if [ -n "${GITHUB_TOKEN:-}" ]; then
         bash "$(dirname "$0")/state-store.sh" "$frame" "last_frame.jpg" "rec ${MODEL}" \
             >/dev/null 2>&1 || true
     fi
