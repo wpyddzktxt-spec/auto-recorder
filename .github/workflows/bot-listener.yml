@@ -26,7 +26,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GH_TOKEN }}
           GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          set -x
           OFFSET=0
           [ -f /tmp/recorder-state/listener_offset ] && OFFSET=$(cat /tmp/recorder-state/listener_offset)
           END=$(( $(date +%s) + 21500 ))
