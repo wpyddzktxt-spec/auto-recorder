@@ -1,0 +1,52 @@
+name: Model Monitor & Bot Handler
+on:
+  schedule:
+    - cron: '*/5 * * * *'
+  workflow_dispatch:
+    inputs:
+      model:
+        description: 'Check specific model (leave empty for all)'
+        required: false
+        default: ''
+
+env:
+  BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+  CHAT_ID: ${{ secrets.CHAT_ID }}
+  STATE_DIR: /tmp/recorder-state
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 8
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq curl jq ffmpeg streamlink 2>/dev/null
+          pip3 install --quiet requests 2>/dev/null
+
+      - name: Setup state
+        run: mkdir -p $STATE_DIR
+
+      - name: Process bot commands
+        id: bot
+        run: bash bot-commands.sh
+
+      - name: Check models & dispatch recordings
+        id: modelcheck
+        run: bash check-models.sh "${{ github.event.inputs.model }}"
+
+      - name: Heartbeat (10:00 & 22:00 UTC)
+        if: github.event.schedule == '*/5 * * * *'
+        run: |
+          HOUR=$(date -u +%H)
+          MIN=$(date -u +%M)
+          if { [ "$HOUR" = "10" ] || [ "$HOUR" = "22" ]; } && [ "$MIN" -lt "10" ]; then
+            bash send-heartbeat.sh
+          fi
+
+      - name: Health self-check
+        run: bash health-check.sh

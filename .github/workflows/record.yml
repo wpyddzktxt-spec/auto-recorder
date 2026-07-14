@@ -1,0 +1,66 @@
+name: Record Model Stream
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: 'Model to record'
+        required: true
+        type: string
+      provider:
+        description: 'Provider (stripchat/bongacams)'
+        required: true
+        type: string
+      hls_url:
+        description: 'HLS stream URL'
+        required: true
+        type: string
+      max_duration:
+        description: 'Max recording duration in seconds (default 20400 = 5h40m)'
+        required: false
+        default: '20400'
+        type: string
+
+env:
+  BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+  CHAT_ID: ${{ secrets.CHAT_ID }}
+  STATE_DIR: /tmp/recorder-state
+
+jobs:
+  record:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    concurrency:
+      group: recording-${{ github.event.inputs.model }}
+      cancel-in-progress: false
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install tools
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq curl jq ffmpeg streamlink 2>/dev/null
+
+      - name: Setup state
+        run: mkdir -p $STATE_DIR
+
+      - name: Record
+        id: record
+        timeout-minutes: 345
+        run: |
+          bash record-single.sh \
+            "${{ github.event.inputs.model }}" \
+            "${{ github.event.inputs.provider }}" \
+            "${{ github.event.inputs.hls_url }}" \
+            "${{ github.event.inputs.max_duration }}"
+
+      - name: Notify offline
+        if: always()
+        run: |
+          if [ -f $STATE_DIR/recording_ended_${{ github.event.inputs.model }} ]; then
+            END_TYPE=$(cat $STATE_DIR/recording_ended_${{ github.event.inputs.model }})
+            curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+              -d "chat_id=${CHAT_ID}" \
+              -d "text=🔴 ${{ github.event.inputs.model }} запись завершена (${END_TYPE})" \
+              -d "disable_notification=true" 2>/dev/null
+          fi

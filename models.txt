@@ -1,0 +1,6 @@
+# Model list for auto-recorder
+# Format: username|provider|method
+# provider: stripchat, bongacams
+# method: api, amf, mobile (detection method)
+JustKatrin|stripchat|api
+moonmaiden|bongacams|amf
