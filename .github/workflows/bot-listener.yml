@@ -5,6 +5,12 @@ on:
     # every 5h45m (with 360-min timeout, this avoids overlap and keeps a fresh listener)
     - cron: '15 */6 * * *'
 
+# Hard rule: at most ONE listener run alive at any time.
+# New dispatches (or cron triggers) cancel the previous one.
+concurrency:
+  group: bot-listener
+  cancel-in-progress: true
+
 env:
   BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
   CHAT_ID: ${{ secrets.CHAT_ID }}
@@ -87,37 +93,66 @@ jobs:
                   echo "  frame: missing"
                 fi
 
-                # Build response text
-                case "$tl" in
+                # Extract first word (so '/status test' -> '/status')
+                cmd=$(printf '%s' "$tl" | awk '{print $1}')
+                # Strip bot username suffix from command (e.g. /status@Su4ki_bot -> /status)
+                cmd=$(printf '%s' "$cmd" | sed 's/@.*//')
+                echo "  parsed cmd='$cmd'"
+
+                # Per-user debounce: ignore if last reply was < 2s ago
+                DEBOUNCE_FILE=/tmp/recorder-state/last_reply_${chat}
+                NOW=$(date +%s)
+                LAST=0
+                [ -f "$DEBOUNCE_FILE" ] && LAST=$(cat "$DEBOUNCE_FILE" 2>/dev/null || echo 0)
+                DELTA=$(( NOW - LAST ))
+                if [ "$DELTA" -lt 2 ] 2>/dev/null; then
+                  echo "  debounce: $DELTA s < 2, skip reply"
+                  OFFSET=$((uid + 1))
+                  echo "$OFFSET" > /tmp/recorder-state/listener_offset
+                  continue
+                fi
+
+                # Build response text + decide whether to attach a photo.
+                # PHOTO=1 only for commands that benefit from a screenshot.
+                PHOTO=0
+                case "$cmd" in
                   /status|status)
                     jk_data=$(curl -s --max-time 5 "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null || echo "")
                     jk=$(printf '%s' "$jk_data" | jq -r '.models[0] | if .stream.online then "online (\(.viewersCount))" else "offline" end' 2>/dev/null)
                     [ -z "$jk" ] && jk="offline"
                     r="JustKatrin: $jk | moonmaiden: offline"
+                    PHOTO=1
                     ;;
                   /models|models)
                     r="JustKatrin, moonmaiden"
+                    PHOTO=1
                     ;;
                   /last|last)
                     r="записей пока нет"
+                    PHOTO=1
                     ;;
                   /help|help|/start|start)
                     r="/status /models /last /help"
+                    # no photo for help
                     ;;
                   *)
                     r="неизвестная команда: $text"
+                    # no photo for unknown -> big spam reduction
                     ;;
                 esac
-                echo "  send msg: $r"
+                echo "  send msg: $r (photo=$PHOTO)"
                 curl -s --max-time 8 "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
                   -d "chat_id=${chat}" --data-urlencode "text=${r}" 2>/dev/null >/dev/null || true
 
-                if [ -n "$FRAME" ] && [ -f "$FRAME" ] && [ -s "$FRAME" ]; then
+                if [ "$PHOTO" = "1" ] && [ -n "$FRAME" ] && [ -f "$FRAME" ] && [ -s "$FRAME" ]; then
                   echo "  send photo: $FRAME"
                   curl -s --max-time 15 "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
                     -F "chat_id=${chat}" -F "photo=@${FRAME}" \
                     -F "caption=последний кадр записи" 2>/dev/null >/dev/null || true
                 fi
+
+                # Update debounce timestamp for this chat
+                echo "$NOW" > "$DEBOUNCE_FILE"
 
                 # Advance offset
                 OFFSET=$((uid + 1))
