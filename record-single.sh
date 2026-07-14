@@ -18,12 +18,13 @@ send_tg() {
         -d "disable_notification=${notify}" 2>/dev/null >/dev/null
 }
 
-send_tg "📹 ${model} запись началась" "false"
+send_tg "📹 ${MODEL} запись началась" "false"
 echo "recording" > "${STATE_DIR}/state_${MODEL}"
 mkdir -p "$WORK_DIR"
 CHUNK_INDEX=0
 TOTAL_BYTES=0
 RETRY_COUNT=0
+LAST_FRAME="${STATE_DIR}/last_frame.jpg"
 
 while true; do
     ELAPSED=$(( $(date +%s) - START_TIME ))
@@ -47,6 +48,8 @@ while true; do
     fi
 
     if [ "$RECORD_OK" = "true" ] && [ -f "$OUTFILE" ] && [ "$(stat -c%s "$OUTFILE" 2>/dev/null || echo 0)" -gt 1024 ]; then
+        # Extract last frame for preview
+        ffmpeg -sseof -0.1 -i "$OUTFILE" -frames:v 1 -q:v 2 -y "$LAST_FRAME" 2>/dev/null || true
         FILE_SIZE=$(stat -c%s "$OUTFILE")
         if curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendVideo" \
             -F "chat_id=${CHAT_ID}" \

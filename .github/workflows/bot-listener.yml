@@ -1,4 +1,4 @@
-name: Bot Listener (Fast Response)
+name: Bot Listener (Fast)
 on:
   workflow_dispatch:
   schedule:
@@ -10,11 +10,9 @@ jobs:
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
-      - name: Setup
-        run: |
-          sudo apt-get install -y -qq jq curl
-          mkdir -p /tmp/recorder-state
-      - name: Long-polling bot
+      - run: sudo apt-get install -y -qq jq curl
+      - run: mkdir -p /tmp/recorder-state
+      - name: Long-polling
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
@@ -30,19 +28,48 @@ jobs:
               tl=$(echo "$text" | tr '[:upper:]' '[:lower:]')
               case "$tl" in
                 /status|status)
-                  jk=$(curl -s --max-time 8 "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null | jq -r '.models[0] | if .stream.online then "online (\(.viewersCount))" else "offline" end' 2>/dev/null)
-                  r="JustKatrin: ${jk:-offline} | moonmaiden: offline" ;;
-                /models|models) r="JustKatrin, moonmaiden" ;;
-                /last|last) r="no records yet" ;;
-                /help|help|/start|start) r="/status /models /last /help" ;;
-                *) r="?" ;;
+                  jk_data=$(curl -s --max-time 8 "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null)
+                  jk=$(echo "$jk_data" | jq -r '.models[0] | if .stream.online then "online (\(.viewersCount))" else "offline" end' 2>/dev/null)
+                  jk_snap=$(echo "$jk_data" | jq -r '.models[0].snapshotUrl // .models[0].previewUrl // ""' 2>/dev/null)
+                  r="JustKatrin: ${jk:-offline} | moonmaiden: offline"
+                  if [ -n "$jk_snap" ] && [ "$jk_snap" != "null" ] && [ "$jk_snap" != "" ]; then
+                    curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
+                      -F "chat_id=${chat}" -F "photo=${jk_snap}" --data-urlencode "caption=${r}" 2>/dev/null >/dev/null
+                  else
+                    curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" -d "chat_id=${chat}" --data-urlencode "text=${r}" 2>/dev/null >/dev/null
+                  fi
+                  if [ -f /tmp/recorder-state/last_frame.jpg ]; then
+                    curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
+                      -F "chat_id=${chat}" -F "photo=@/tmp/recorder-state/last_frame.jpg" \
+                      -F "caption=last frame" 2>/dev/null >/dev/null
+                  fi
+                  ;;
+                /models|models)
+                  r="JustKatrin, moonmaiden"
+                  curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" -d "chat_id=${chat}" --data-urlencode "text=${r}" 2>/dev/null >/dev/null
+                  if [ -f /tmp/recorder-state/last_frame.jpg ]; then
+                    curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
+                      -F "chat_id=${chat}" -F "photo=@/tmp/recorder-state/last_frame.jpg" \
+                      -F "caption=last frame" 2>/dev/null >/dev/null
+                  fi
+                  ;;
+                /last|last) r="no records yet"
+                  curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" -d "chat_id=${chat}" --data-urlencode "text=${r}" 2>/dev/null >/dev/null
+                  if [ -f /tmp/recorder-state/last_frame.jpg ]; then
+                    curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
+                      -F "chat_id=${chat}" -F "photo=@/tmp/recorder-state/last_frame.jpg" \
+                      -F "caption=last frame" 2>/dev/null >/dev/null
+                  fi
+                  ;;
+                /help|help|/start|start) r="/status /models /last /help" 
+                  curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" -d "chat_id=${chat}" --data-urlencode "text=${r}" 2>/dev/null >/dev/null
+                  ;;
+                *) r="?"
+                  curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" -d "chat_id=${chat}" --data-urlencode "text=${r}" 2>/dev/null >/dev/null
+                  ;;
               esac
-              curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-                -d "chat_id=${chat}" --data-urlencode "text=${r}" -d "disable_notification=false" 2>/dev/null >/dev/null
               echo "$uid" > /tmp/recorder-state/listener_offset
             done
-            if [ -f /tmp/recorder-state/listener_offset ]; then
-              OFFSET=$(($(cat /tmp/recorder-state/listener_offset) + 1))
-            fi
+            [ -f /tmp/recorder-state/listener_offset ] && OFFSET=$(($(cat /tmp/recorder-state/listener_offset) + 1))
             echo "$OFFSET" > /tmp/recorder-state/listener_offset
           done

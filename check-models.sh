@@ -17,14 +17,27 @@ send_tg() {
         -d "disable_notification=${notify}" 2>/dev/null >/dev/null
 }
 
+send_photo() {
+    local photo_url="$1"
+    local caption="$2"
+    if [ -n "$photo_url" ]; then
+        curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
+            -F "chat_id=${CHAT_ID}" \
+            -F "photo=${photo_url}" \
+            -F "caption=${caption}" 2>/dev/null >/dev/null
+    fi
+}
+
 check_stripchat() {
     local model="$1"
     local data
     data=$(curl -s --max-time 15 "https://go.xxxiijmp.com/api/models?modelsList=${model}&strict=1" 2>/dev/null)
-    echo "$data" | jq -r '
+    local status
+    status=$(echo "$data" | jq -r '
         if .models and (.models | length > 0) then
-            .models[0] | if .stream.online then "online|\(.stream.url // "")|\(.viewersCount // 0)" else "offline" end
-        else "offline" end' 2>/dev/null
+            .models[0] | if .stream.online then "online|\(.stream.url // "")|\(.viewersCount // 0)|\(.snapshotUrl // "")|\(.previewUrl // "")" else "offline" end
+        else "offline" end' 2>/dev/null)
+    echo "$status"
 }
 
 check_bongacams() {
@@ -41,7 +54,7 @@ check_bongacams() {
         hls_url=$(echo "$amf_resp" | grep -oP '"videoServerUrl":"[^"]*"' | head -1 | sed 's/"videoServerUrl":"//;s/"//')
         viewers=$(echo "$amf_resp" | grep -oP '"viewersCount":\d+' | head -1 | sed 's/"viewersCount"://')
         if [ -n "$hls_url" ]; then
-            echo "online|${hls_url}/hls/stream_${model}/playlist.m3u8|${viewers:-0}"
+            echo "online|${hls_url}/hls/stream_${model}/playlist.m3u8|${viewers:-0}||"
             return
         fi
     fi
@@ -75,8 +88,16 @@ while IFS='|' read -r model provider method; do
     if [ "$status" = "online" ]; then
         hls_url=$(echo "$result" | cut -d'|' -f2)
         viewers=$(echo "$result" | cut -d'|' -f3)
+        snapshot=$(echo "$result" | cut -d'|' -f4)
+        preview=$(echo "$result" | cut -d'|' -f5)
         if [ "$prev_state" != "online" ]; then
-            send_tg "🟢 ${model} online (${viewers} зр.)" "false"
+            # Send notification with screenshot
+            photo_url="${snapshot:-${preview}}"
+            if [ -n "$photo_url" ]; then
+                send_photo "$photo_url" "🟢 ${model} online (${viewers} зр.)"
+            else
+                send_tg "🟢 ${model} online (${viewers} зр.)" "false"
+            fi
             if [ -n "$hls_url" ]; then
                 if command -v gh &>/dev/null; then
                     gh workflow run record.yml -f "model=${model}" -f "provider=${provider}" -f "hls_url=${hls_url}" 2>/dev/null
