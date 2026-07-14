@@ -14,27 +14,26 @@ jobs:
         run: |
           sudo apt-get install -y -qq jq curl
           mkdir -p /tmp/recorder-state
-      - name: Long-polling bot (6h max)
+      - name: Long-polling bot
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
         run: |
           OFFSET=0
           [ -f /tmp/recorder-state/listener_offset ] && OFFSET=$(cat /tmp/recorder-state/listener_offset)
-          END=$(( $(date +%s) + 21600 ))
+          END=$(( $(date +%s) + 21500 ))
           while [ $(date +%s) -lt $END ]; do
             UPDATES=$(curl -s --max-time 30 "https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?offset=${OFFSET}&timeout=25" 2>/dev/null)
-            echo "$UPDATES" | jq -r '.result[]? | "\(.update_id)|\(.message.chat.id // "")|\(.message.text // "")"' 2>/dev/null | while IFS='|' read -r uid chat text; do
+            echo "$UPDATES" | jq -r '.result[]? | [.update_id, (.message.chat.id // ""), (.message.text // "")] | join("|")' 2>/dev/null | while IFS='|' read -r uid chat text; do
               [ -z "$chat" ] && continue
               [ "$chat" != "$CHAT_ID" ] && continue
               tl=$(echo "$text" | tr '[:upper:]' '[:lower:]')
               case "$tl" in
                 /status|status)
-                  jk=$(curl -s --max-time 8 "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null | jq -r '.models[0] | if .stream.online then "online (\(.viewersCount))" else "оффлайн" end' 2>/dev/null)
-                  r="JustKatrin: ${jk:-оффлайн}
-moonmaiden: оффлайн" ;;
+                  jk=$(curl -s --max-time 8 "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null | jq -r '.models[0] | if .stream.online then "online (\(.viewersCount))" else "offline" end' 2>/dev/null)
+                  r="JustKatrin: ${jk:-offline} | moonmaiden: offline" ;;
                 /models|models) r="JustKatrin, moonmaiden" ;;
-                /last|last) r="записей пока нет" ;;
+                /last|last) r="no records yet" ;;
                 /help|help|/start|start) r="/status /models /last /help" ;;
                 *) r="?" ;;
               esac
@@ -42,6 +41,8 @@ moonmaiden: оффлайн" ;;
                 -d "chat_id=${chat}" --data-urlencode "text=${r}" -d "disable_notification=false" 2>/dev/null >/dev/null
               echo "$uid" > /tmp/recorder-state/listener_offset
             done
-            [ -f /tmp/recorder-state/listener_offset ] && OFFSET=$(($(cat /tmp/recorder-state/listener_offset) + 1))
+            if [ -f /tmp/recorder-state/listener_offset ]; then
+              OFFSET=$(($(cat /tmp/recorder-state/listener_offset) + 1))
+            fi
             echo "$OFFSET" > /tmp/recorder-state/listener_offset
           done
