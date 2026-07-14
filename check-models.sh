@@ -18,10 +18,14 @@ PERSIST_FILE="check_state.json"
 
 log() { echo "[$(date -u +%H:%M:%S)] $*"; }
 
-# Load persistent state from 'state' branch; fall back to empty {}
+# Load persistent state from 'state' branch; fall back to empty {}.
+# IMPORTANT: redirect state-fetch.sh's stdout to /dev/null — it prints
+# informational "OK: fetched N bytes" lines that would otherwise be
+# captured here and break jq parsing of PSTATE (causes exit 5 on runs
+# after the first one when the state file exists).
 load_state() {
   if [ -n "${GITHUB_TOKEN:-}" ]; then
-    bash "${SCRIPT_DIR}/state-fetch.sh" "$PERSIST_FILE" "$STATE_DIR/$PERSIST_FILE" 2>/dev/null || true
+    bash "${SCRIPT_DIR}/state-fetch.sh" "$PERSIST_FILE" "$STATE_DIR/$PERSIST_FILE" >/dev/null 2>&1 || true
   fi
   if [ -f "$STATE_DIR/$PERSIST_FILE" ]; then
     cat "$STATE_DIR/$PERSIST_FILE"
@@ -39,6 +43,8 @@ save_state() {
       >/dev/null 2>&1 || true
   fi
 }
+# Note: state-store.sh also has its own status messages to stdout; the
+# >/dev/null 2>&1 above already swallows them.
 
 # Update a single key in the persistent state JSON
 # usage: update_state KEY VALUE JSON
