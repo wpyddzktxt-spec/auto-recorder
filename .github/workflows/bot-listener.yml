@@ -72,12 +72,16 @@ jobs:
 
             if [ "$COUNT" -gt 0 ] 2>/dev/null; then
               echo "[$(date -u +%H:%M:%S)] iter=$ITER GOT $COUNT updates"
-              printf '%s' "$RAW" | jq -c '.result[]' 2>/dev/null | while IFS= read -r upd; do
+              # CRITICAL: use process substitution <(...) so the while loop
+              # runs in THIS shell. With a pipe |, the while runs in a
+              # subshell and OFFSET changes never propagate -> infinite
+              # re-fetching of the same updates -> 400+ messages in 5 min.
+              while IFS= read -r upd; do
                 uid=$(printf '%s' "$upd" | jq -r '.update_id' 2>/dev/null)
                 chat=$(printf '%s' "$upd" | jq -r '.message.chat.id // ""' 2>/dev/null)
                 text=$(printf '%s' "$upd" | jq -r '.message.text // ""' 2>/dev/null)
                 [ -z "$chat" ] && continue
-                [ "$chat" != "$CHAT_ID" ] && { echo "[$(date -u +%H:%M:%S)] skip chat=$chat"; continue; }
+                [ "$chat" != "$CHAT_ID" ] && { echo "[$(date -u +%H:%M:%S)] skip chat=$chat"; OFFSET=$((uid + 1)); continue; }
                 tl=$(printf '%s' "$text" | tr '[:upper:]' '[:lower:]')
                 echo "[$(date -u +%H:%M:%S)] cmd uid=$uid chat=$chat text='$tl'"
 
@@ -154,11 +158,11 @@ jobs:
                 # Update debounce timestamp for this chat
                 echo "$NOW" > "$DEBOUNCE_FILE"
 
-                # Advance offset
+                # Advance offset (this now runs in the OUTER shell, not a subshell)
                 OFFSET=$((uid + 1))
                 echo "$OFFSET" > /tmp/recorder-state/listener_offset
                 echo "[$(date -u +%H:%M:%S)] offset -> $OFFSET"
-              done
+              done < <(printf '%s' "$RAW" | jq -c '.result[]' 2>/dev/null)
             fi
           done
 
