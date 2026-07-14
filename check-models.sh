@@ -50,7 +50,7 @@ publish_frame() {
     local frame="$1"
     [ -f "$frame" ] || return 1
     cp -f "$frame" "${STATE_DIR}/last_frame.jpg" 2>/dev/null || true
-    if [ -n "${GH_TOKEN:-}" ] && [ -x "${SCRIPT_DIR}/state-store.sh" ]; then
+    if [ -n "${GITHUB_TOKEN:-}" ] && [ -x "${SCRIPT_DIR}/state-store.sh" ]; then
         bash "${SCRIPT_DIR}/state-store.sh" "$frame" "last_frame.jpg" "preview update" \
             >/dev/null 2>&1 || true
     fi
@@ -145,10 +145,8 @@ while IFS='|' read -r model provider method; do
 
             # Trigger recording
             if [ -n "$hls_url" ]; then
-                if command -v gh &>/dev/null; then
-                    gh workflow run record.yml -f "model=${model}" -f "provider=${provider}" -f "hls_url=${hls_url}" 2>/dev/null
-                else
-                    curl -s -X POST -H "Authorization: Bearer ${GH_TOKEN}" \
+                if [ -n "${GITHUB_TOKEN:-}" ]; then
+                    curl -s -X POST -H "Authorization: Bearer ${GITHUB_TOKEN}" \
                         -H "Accept: application/vnd.github+json" \
                         "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/record.yml/dispatches" \
                         -d "{\"ref\":\"main\",\"inputs\":{\"model\":\"${model}\",\"provider\":\"${provider}\",\"hls_url\":\"${hls_url}\"}}" 2>/dev/null >/dev/null

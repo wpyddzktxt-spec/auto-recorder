@@ -2,7 +2,8 @@ name: Bot Listener (Fast)
 on:
   workflow_dispatch:
   schedule:
-    - cron: '*/1 * * * *'
+    # every 5h45m (with 360-min timeout, this avoids overlap and keeps a fresh listener)
+    - cron: '15 */6 * * *'
 
 env:
   BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
