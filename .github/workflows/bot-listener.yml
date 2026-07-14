@@ -155,7 +155,11 @@ jobs:
                 case "$cmd" in
                   /status|status)
                     jk_data=$(curl -s --max-time 5 "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null || echo "")
-                    jk=$(printf '%s' "$jk_data" | jq -r '.models[0] | if .stream.online then "online (\(.viewersCount))" else "offline" end' 2>/dev/null)
+                    # API does NOT have .stream.online — use .stream.url presence as online indicator
+                    jk=$(printf '%s' "$jk_data" | jq -r '
+                      if (.count // 0) > 0 and .models[0].stream.url != null then
+                        "online (\(.models[0].viewersCount // 0))"
+                      else "offline" end' 2>/dev/null)
                     [ -z "$jk" ] && jk="offline"
                     r="JustKatrin: $jk | moonmaiden: offline"
                     PHOTO=1
