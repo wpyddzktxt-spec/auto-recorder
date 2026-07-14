@@ -4,18 +4,27 @@ on:
   schedule:
     - cron: '*/6 * * * *'
 
+env:
+  BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+  CHAT_ID: ${{ secrets.CHAT_ID }}
+  GH_TOKEN: ${{ secrets.GH_TOKEN }}
+  GITHUB_REPOSITORY: ${{ github.repository }}
+  STATE_DIR: /tmp/recorder-state
+
 jobs:
   listen:
     runs-on: ubuntu-latest
     timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
-      - run: sudo apt-get install -y -qq jq curl
+      - run: sudo apt-get install -y -qq jq curl python3
       - run: mkdir -p /tmp/recorder-state
       - name: Long-polling
         env:
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
           CHAT_ID: ${{ secrets.CHAT_ID }}
+          GH_TOKEN: ${{ secrets.GH_TOKEN }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
           OFFSET=0
           [ -f /tmp/recorder-state/listener_offset ] && OFFSET=$(cat /tmp/recorder-state/listener_offset)
@@ -27,10 +36,11 @@ jobs:
               [ "$chat" != "$CHAT_ID" ] && continue
               tl=$(echo "$text" | tr '[:upper:]' '[:lower:]')
 
-              # Try to fetch latest frame from state branch
+              # Fetch latest frame from state branch (works for private repos)
               FRAME=/tmp/recorder-state/last_frame.jpg
-              curl -sf --max-time 15 -L -o "$FRAME" \
-                "https://raw.githubusercontent.com/wpyddzktxt-spec/auto-recorder/state/last_frame.jpg" 2>/dev/null || FRAME=""
+              rm -f "$FRAME"
+              bash ./state-fetch.sh last_frame.jpg "$FRAME" 2>/dev/null || true
+              [ -s "$FRAME" ] || FRAME=""
 
               case "$tl" in
                 /status|status)

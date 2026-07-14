@@ -9,6 +9,7 @@ env:
   CHAT_ID: ${{ secrets.CHAT_ID }}
   GH_TOKEN: ${{ secrets.GH_TOKEN }}
   STATE_DIR: /tmp/recorder-state
+  GITHUB_REPOSITORY: ${{ github.repository }}
 
 jobs:
   check:
