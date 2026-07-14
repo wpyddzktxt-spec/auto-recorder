@@ -10,10 +10,11 @@ mkdir -p "$STATE_DIR"
 
 send_tg() {
     local text="$1"
+    local notify="${2:-true}"
     curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
         -d "chat_id=${CHAT_ID}" \
         --data-urlencode "text=${text}" \
-        -d "disable_notification=true" 2>/dev/null
+        -d "disable_notification=${notify}" 2>/dev/null >/dev/null
 }
 
 check_stripchat() {
@@ -31,7 +32,6 @@ check_bongacams() {
     local amf_resp
     amf_resp=$(curl -s --max-time 15 -X POST 'https://bongacams.com/tools/amf.php?x-country=en' \
         -H 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' \
-        -H 'Accept: */*' \
         -H 'Origin: https://bongacams.com' \
         -H 'Referer: https://bongacams.com/' \
         -d "method=getRoomData&args[]=${model}&args[]=false" 2>/dev/null)
@@ -45,15 +45,6 @@ check_bongacams() {
             return
         fi
     fi
-
-    local mobile_resp
-    mobile_resp=$(curl -s --max-time 10 -L "https://m.bongacams.com/${model}" \
-        -H 'User-Agent: Mozilla/5.0 (iPhone; CPU iPhone OS 16_0 like Mac OS X)' 2>/dev/null)
-    if echo "$mobile_resp" | grep -q '"status":"public"'; then
-        echo "online||0"
-        return
-    fi
-
     echo "offline"
 }
 
@@ -61,11 +52,9 @@ while IFS='|' read -r model provider method; do
     [[ -z "$model" || "$model" =~ ^# ]] && continue
     model=$(echo "$model" | xargs)
     provider=$(echo "$provider" | xargs)
-
     [ -n "$FILTER_MODEL" ] && [ "$model" != "$FILTER_MODEL" ] && continue
 
     if [ -f "${STATE_DIR}/state_${model}" ]; then
-        echo "[$(date)] $model: already recording, skip"
         continue
     fi
 
@@ -86,31 +75,22 @@ while IFS='|' read -r model provider method; do
     if [ "$status" = "online" ]; then
         hls_url=$(echo "$result" | cut -d'|' -f2)
         viewers=$(echo "$result" | cut -d'|' -f3)
-
         if [ "$prev_state" != "online" ]; then
-            echo "[$(date)] $model came online!"
-            send_tg "🟢 $model онлайн (${viewers} зрителей) — запускаю запись..."
-
+            send_tg "🟢 ${model} online (${viewers} зр.)" "false"
             if [ -n "$hls_url" ]; then
                 if command -v gh &>/dev/null; then
                     gh workflow run record.yml -f "model=${model}" -f "provider=${provider}" -f "hls_url=${hls_url}" 2>/dev/null
                 else
-                    curl -s -X POST \
-                        -H "Authorization: Bearer ${GH_TOKEN}" \
+                    curl -s -X POST -H "Authorization: Bearer ${GH_TOKEN}" \
                         -H "Accept: application/vnd.github+json" \
                         "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/record.yml/dispatches" \
-                        -d "{\"ref\":\"main\",\"inputs\":{\"model\":\"${model}\",\"provider\":\"${provider}\",\"hls_url\":\"${hls_url}\"}}" 2>/dev/null
+                        -d "{\"ref\":\"main\",\"inputs\":{\"model\":\"${model}\",\"provider\":\"${provider}\",\"hls_url\":\"${hls_url}\"}}" 2>/dev/null >/dev/null
                 fi
-            else
-                send_tg "⚠️ $model: не удалось получить HLS URL"
             fi
-        else
-            echo "[$(date)] $model: still online (${viewers} viewers)"
         fi
     else
         if [ "$prev_state" = "online" ]; then
-            echo "[$(date)] $model went offline"
-            send_tg "🔴 $model офлайн"
+            send_tg "🔴 ${model} offline" "false"
         fi
     fi
 done < models.txt
