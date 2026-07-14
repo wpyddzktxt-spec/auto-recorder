@@ -5,6 +5,7 @@ BOT_TOKEN="${BOT_TOKEN:?}"
 CHAT_ID="${CHAT_ID:?}"
 STATE_DIR="${STATE_DIR:-/tmp/recorder-state}"
 FILTER_MODEL="${1:-}"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 mkdir -p "$STATE_DIR"
 
@@ -17,14 +18,41 @@ send_tg() {
         -d "disable_notification=${notify}" 2>/dev/null >/dev/null
 }
 
-send_photo() {
-    local photo_url="$1"
+send_photo_file() {
+    local file="$1"
     local caption="$2"
-    if [ -n "$photo_url" ]; then
-        curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
-            -F "chat_id=${CHAT_ID}" \
-            -F "photo=${photo_url}" \
-            -F "caption=${caption}" 2>/dev/null >/dev/null
+    [ -f "$file" ] || return 1
+    curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
+        -F "chat_id=${CHAT_ID}" \
+        -F "photo=@${file}" \
+        -F "caption=${caption}" 2>/dev/null >/dev/null
+}
+
+send_photo_url() {
+    local url="$1"
+    local caption="$2"
+    [ -n "$url" ] || return 1
+    curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
+        -F "chat_id=${CHAT_ID}" \
+        -F "photo=${url}" \
+        -F "caption=${caption}" 2>/dev/null >/dev/null
+}
+
+# Extract first frame from HLS as preview
+extract_frame_from_hls() {
+    local url="$1"
+    local out="$2"
+    timeout 20 ffmpeg -y -i "$url" -frames:v 1 -q:v 3 -ss 2 -vf "scale=480:-1" "$out" 2>/dev/null || true
+    [ -s "$out" ]
+}
+
+publish_frame() {
+    local frame="$1"
+    [ -f "$frame" ] || return 1
+    cp -f "$frame" "${STATE_DIR}/last_frame.jpg" 2>/dev/null || true
+    if [ -n "${GH_TOKEN:-}" ] && [ -x "${SCRIPT_DIR}/state-store.sh" ]; then
+        bash "${SCRIPT_DIR}/state-store.sh" "$frame" "last_frame.jpg" "preview update" \
+            >/dev/null 2>&1 || true
     fi
 }
 
@@ -52,7 +80,7 @@ check_bongacams() {
     if echo "$amf_resp" | grep -q '"status":"success"'; then
         local hls_url viewers
         hls_url=$(echo "$amf_resp" | grep -oP '"videoServerUrl":"[^"]*"' | head -1 | sed 's/"videoServerUrl":"//;s/"//')
-        viewers=$(echo "$amf_resp" | grep -oP '"viewersCount":\d+' | head -1 | sed 's/"viewersCount"://')
+        viewers=$(echo "$amf_resp" | grep -oP '"viewersCount":\d+' | head -1 | sed '"s/"viewersCount"://')
         if [ -n "$hls_url" ]; then
             echo "online|${hls_url}/hls/stream_${model}/playlist.m3u8|${viewers:-0}||"
             return
@@ -90,14 +118,32 @@ while IFS='|' read -r model provider method; do
         viewers=$(echo "$result" | cut -d'|' -f3)
         snapshot=$(echo "$result" | cut -d'|' -f4)
         preview=$(echo "$result" | cut -d'|' -f5)
+
         if [ "$prev_state" != "online" ]; then
-            # Send notification with screenshot
+            # Just went online — notify with screenshot
+            local_frame="${STATE_DIR}/preview_${model}.jpg"
+            sent=0
+            # Try API snapshot/preview first
             photo_url="${snapshot:-${preview}}"
-            if [ -n "$photo_url" ]; then
-                send_photo "$photo_url" "🟢 ${model} online (${viewers} зр.)"
-            else
+            if [ -n "$photo_url" ] && [ "$photo_url" != "null" ] && [ "$photo_url" != "" ]; then
+                if send_photo_url "$photo_url" "🟢 ${model} online (${viewers} зр.)"; then
+                    sent=1
+                fi
+            fi
+            # Fallback: extract frame from HLS
+            if [ "$sent" -eq 0 ] && [ -n "$hls_url" ]; then
+                if extract_frame_from_hls "$hls_url" "$local_frame"; then
+                    publish_frame "$local_frame"
+                    send_photo_file "$local_frame" "🟢 ${model} online (${viewers} зр.)"
+                    sent=1
+                fi
+            fi
+            # Fallback: text only
+            if [ "$sent" -eq 0 ]; then
                 send_tg "🟢 ${model} online (${viewers} зр.)" "false"
             fi
+
+            # Trigger recording
             if [ -n "$hls_url" ]; then
                 if command -v gh &>/dev/null; then
                     gh workflow run record.yml -f "model=${model}" -f "provider=${provider}" -f "hls_url=${hls_url}" 2>/dev/null
