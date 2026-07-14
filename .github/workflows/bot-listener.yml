@@ -42,12 +42,37 @@ jobs:
 
           echo "[$(date -u +%H:%M:%S)] START listener boot"
 
-          # Read offset
+          # Read offset — prefer the COMMITTED ./listener_offset file
+          # (which survives across runner restarts); fall back to the
+          # local /tmp copy; if neither exists, ask Telegram for the
+          # current highest update_id and start from there + 1 to skip
+          # any backlog.
           OFFSET=0
-          if [ -f /tmp/recorder-state/listener_offset ]; then
-            OFFSET=$(cat /tmp/recorder-state/listener_offset)
+          if [ -f ./listener_offset ]; then
+            OFFSET=$(cat ./listener_offset 2>/dev/null | tr -d '[:space:]')
+            echo "[$(date -u +%H:%M:%S)] using committed offset: $OFFSET"
+          elif [ -f /tmp/recorder-state/listener_offset ]; then
+            OFFSET=$(cat /tmp/recorder-state/listener_offset 2>/dev/null | tr -d '[:space:]')
+            echo "[$(date -u +%H:%M:%S)] using local offset: $OFFSET"
           fi
-          echo "[$(date -u +%H:%M:%S)] offset=$OFFSET"
+          # If still 0 (no committed file), peek Telegram for latest
+          # update_id and skip everything in queue.
+          if [ "${OFFSET:-0}" = "0" ] || ! [ "${OFFSET:-0}" -ge 0 ] 2>/dev/null; then
+            PEEK=$(curl -s --max-time 10 "https://api.telegram.org/bot${BOT_TOKEN}/getUpdates?timeout=0" 2>/dev/null || echo '{"ok":false,"result":[]}')
+            PEEK_ID=$(printf '%s' "$PEEK" | jq -r '[.result[].update_id] | (max // 0)' 2>/dev/null)
+            if [ -n "$PEEK_ID" ] && [ "$PEEK_ID" -ge 0 ] 2>/dev/null; then
+              OFFSET=$((PEEK_ID + 1))
+              echo "[$(date -u +%H:%M:%S)] peeked latest update_id=$PEEK_ID, setting OFFSET=$OFFSET (skip backlog)"
+            else
+              OFFSET=0
+              echo "[$(date -u +%H:%M:%S)] no updates in queue, OFFSET=0"
+            fi
+          fi
+          echo "[$(date -u +%H:%M:%S)] final offset=$OFFSET"
+          # Persist immediately so a crash here still saves state
+          mkdir -p /tmp/recorder-state
+          echo "$OFFSET" > /tmp/recorder-state/listener_offset
+          echo "$OFFSET" > ./listener_offset
 
           # 6h budget = 21600s; we use 21500s to leave cleanup time
           END=$(( $(date +%s) + 21500 ))
@@ -161,6 +186,7 @@ jobs:
                 # Advance offset (this now runs in the OUTER shell, not a subshell)
                 OFFSET=$((uid + 1))
                 echo "$OFFSET" > /tmp/recorder-state/listener_offset
+                echo "$OFFSET" > ./listener_offset
                 echo "[$(date -u +%H:%M:%S)] offset -> $OFFSET"
               done < <(printf '%s' "$RAW" | jq -c '.result[]' 2>/dev/null)
             fi
