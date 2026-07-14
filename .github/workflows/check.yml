@@ -7,9 +7,12 @@ on:
 env:
   BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
   CHAT_ID: ${{ secrets.CHAT_ID }}
-  GH_TOKEN: ${{ secrets.GH_TOKEN }}
+  GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
   STATE_DIR: /tmp/recorder-state
   GITHUB_REPOSITORY: ${{ github.repository }}
+
+permissions:
+  contents: write
 
 jobs:
   check:
