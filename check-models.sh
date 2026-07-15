@@ -133,27 +133,54 @@ check_bongacams() {
         -H 'X-Requested-With: XMLHttpRequest' \
         -d "method=getRoomData&args[]=${model}&args[]=false" 2>/dev/null || echo "")
 
-    if echo "$amf_resp" | grep -q '"status":"success"' && \
-       echo "$amf_resp" | grep -q '"isOnline":true\|"isOnline": true'; then
-        local hls_url viewers
-        hls_url=$(echo "$amf_resp" | python3 -c 'import sys,json
+    if echo "$amf_resp" | grep -q '"status":"success"'; then
+        local is_online hls_url viewers
+        is_online=$(echo "$amf_resp" | python3 -c '
+import sys,json
 try:
     d=json.loads(sys.stdin.read())
-    print((d.get("localData") or {}).get("videoServerUrl") or "")
+    print("true" if (d.get("performerData") or {}).get("isOnline") else "false")
 except Exception: pass' 2>/dev/null)
-        viewers=$(echo "$amf_resp" | python3 -c 'import sys,json
+        viewers=$(echo "$amf_resp" | python3 -c '
+import sys,json
 try:
     d=json.loads(sys.stdin.read())
     v=(d.get("performerData") or {}).get("viewersCount") or 0
     print(int(v))
 except Exception: pass' 2>/dev/null)
-        if [ -n "$hls_url" ]; then
-            case "$hls_url" in
-                http://*|https://*) ;;
-                //*) hls_url="https:${hls_url}" ;;
-                *)  hls_url="https://${hls_url}" ;;
-            esac
-            echo "online|${hls_url}/hls/stream_${model}/playlist.m3u8|${viewers:-0}||"
+
+        if [ "$is_online" = "true" ]; then
+            # Try mybro API first (resolves correct HLS edge for any videoEncoder)
+            local mybro_url
+            mybro_url=$(curl -s --max-time 8 \
+                "https://mybro.tv/api/v1/models/alias/${model}_" 2>/dev/null | \
+                python3 -c 'import sys,json
+try:
+    d=json.loads(sys.stdin.read())
+    print((d.get("model") or {}).get("streamUrl") or "")
+except Exception: pass' 2>/dev/null)
+            if [ -n "$mybro_url" ] && [ "$mybro_url" != "null" ]; then
+                echo "online|${mybro_url}|${viewers:-0}||"
+                return
+            fi
+
+            # Fallback: AMF videoServerUrl (works for external encoder models)
+            hls_url=$(echo "$amf_resp" | python3 -c 'import sys,json
+try:
+    d=json.loads(sys.stdin.read())
+    print((d.get("localData") or {}).get("videoServerUrl") or "")
+except Exception: pass' 2>/dev/null)
+            if [ -n "$hls_url" ]; then
+                case "$hls_url" in
+                    http://*|https://*) ;;
+                    //*) hls_url="https:${hls_url}" ;;
+                    *)  hls_url="https://${hls_url}" ;;
+                esac
+                echo "online|${hls_url}/hls/stream_${model}/playlist.m3u8|${viewers:-0}||"
+                return
+            fi
+
+            echo "online||${viewers:-0}||"
             return
         fi
     fi
