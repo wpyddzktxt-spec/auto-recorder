@@ -201,17 +201,8 @@ jobs:
                   # BongaCams uses WebRTC now — get real HLS URL from mybro.tv API
                   MN_HLS=$(curl -s --max-time 8 'https://mybro.tv/api/v1/models/alias/moonmaiden_' \
                     -H 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' 2>/dev/null | \
-                    python3 -c 'import sys,json
-try:
-    d=json.loads(sys.stdin.read())
-    print((d.get("model") or {}).get("streamUrl") or "")
-except Exception: pass' 2>/dev/null)
-                  MN_VIEWERS=$(echo "$MN_RESP" | python3 -c 'import sys,json
-try:
-    d=json.loads(sys.stdin.read())
-    v=(d.get("performerData") or {}).get("viewersCount") or 0
-    print(int(v))
-except Exception: pass' 2>/dev/null)
+                    python3 -c 'import sys,json; d=json.load(sys.stdin); print((d.get("model") or {}).get("streamUrl") or "")' 2>/dev/null)
+                  MN_VIEWERS=$(echo "$MN_RESP" | python3 -c 'import sys,json; d=json.load(sys.stdin); print((d.get("performerData") or {}).get("viewersCount") or 0)' 2>/dev/null)
                 fi
                 echo "[$(date -u +%H:%M:%S)]   moonmaiden: prev=$PREV_MN cur=$CUR_MN viewers=$MN_VIEWERS"
 
@@ -409,12 +400,7 @@ except Exception: pass' 2>/dev/null)
                       -d 'method=getRoomData&args[]=moonmaiden&args[]=false' 2>/dev/null || echo "")
                     mn="offline"
                     if echo "$mn_resp" | grep -q '"isOnline":true\|"isOnline": true'; then
-                      mn_views=$(echo "$mn_resp" | python3 -c 'import sys,json
-try:
-    d=json.loads(sys.stdin.read())
-    v=(d.get("performerData") or {}).get("viewersCount") or 0
-    print(int(v))
-except Exception: pass' 2>/dev/null || echo 0)
+                      mn_views=$(echo "$mn_resp" | python3 -c 'import sys,json; d=json.load(sys.stdin); print((d.get("performerData") or {}).get("viewersCount") or 0)' 2>/dev/null || echo 0)
                       mn="online (${mn_views})"
                     fi
                     r="JustKatrin: $jk | moonmaiden: $mn | Maddy_May: $mm_status"
