@@ -105,16 +105,29 @@ jobs:
                   PREV_STATE=$(cat "$CHECK_STATE_FILE")
                 fi
                 PREV_JK=$(echo "$PREV_STATE" | jq -r '.JustKatrin // "offline"' 2>/dev/null)
-                # Query current JustKatrin status
-                JK_DATA=$(curl -s --max-time 8 "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null || echo "")
+                # Query current JustKatrin status via official Stripchat API
+                # (go.xxxiijmp.com misses models in private/p2p shows)
+                JK_OFFICIAL=$(curl -s --max-time 8 \
+                  "https://stripchat.com/api/front/v2/models/username/JustKatrin/cam" \
+                  -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+                  -H "Accept: application/json" 2>/dev/null || echo "")
                 CUR_JK="offline"
                 JK_URL=""
-                if [ -n "$JK_DATA" ]; then
-                  ONLINE=$(echo "$JK_DATA" | jq -r 'if (.count // 0) > 0 and .models[0].stream.url != null then "online" else "offline" end' 2>/dev/null)
-                  CUR_JK="$ONLINE"
-                  JK_URL=$(echo "$JK_DATA" | jq -r '.models[0].stream.url // ""' 2>/dev/null)
+                VIEWERS=0
+                IS_LIVE=$(echo "$JK_OFFICIAL" | jq -r '.user.user.isLive // false' 2>/dev/null)
+                if [ "$IS_LIVE" = "true" ]; then
+                  CUR_JK="online"
+                  # Get HLS URL from go.xxxiijmp.com (provides correct edge server)
+                  JK_DATA=$(curl -s --max-time 8 \
+                    "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null || echo "")
+                  if [ -n "$JK_DATA" ]; then
+                    JK_COUNT=$(echo "$JK_DATA" | jq -r '.count // 0' 2>/dev/null)
+                    if [ "$JK_COUNT" -gt 0 ] 2>/dev/null; then
+                      JK_URL=$(echo "$JK_DATA" | jq -r '.models[0].stream.url // ""' 2>/dev/null)
+                      VIEWERS=$(echo "$JK_DATA" | jq -r '.models[0].viewersCount // 0' 2>/dev/null)
+                    fi
+                  fi
                 fi
-                VIEWERS=$(echo "$JK_DATA" | jq -r '.models[0].viewersCount // 0' 2>/dev/null)
                 echo "[$(date -u +%H:%M:%S)]   JustKatrin: prev=$PREV_JK cur=$CUR_JK viewers=$VIEWERS"
                 # Transition offline -> online
                 if [ "$CUR_JK" = "online" ] && [ "$PREV_JK" != "online" ]; then
@@ -342,13 +355,19 @@ except Exception: pass' 2>/dev/null)
                 PHOTO=0
                 case "$cmd" in
                   /status|status)
-                    jk_data=$(curl -s --max-time 5 "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null || echo "")
-                    # API does NOT have .stream.online — use .stream.url presence as online indicator
-                    jk=$(printf '%s' "$jk_data" | jq -r '
-                      if (.count // 0) > 0 and .models[0].stream.url != null then
-                        "online (\(.models[0].viewersCount // 0))"
-                      else "offline" end' 2>/dev/null)
-                    [ -z "$jk" ] && jk="offline"
+                    jk_official=$(curl -s --max-time 8 \
+                      "https://stripchat.com/api/front/v2/models/username/JustKatrin/cam" \
+                      -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+                      -H "Accept: application/json" 2>/dev/null || echo "")
+                    jk_is_live=$(echo "$jk_official" | jq -r '.user.user.isLive // false' 2>/dev/null)
+                    if [ "$jk_is_live" = "true" ]; then
+                      jk_views=$(curl -s --max-time 5 \
+                        "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null | \
+                        jq -r '.models[0].viewersCount // 0' 2>/dev/null || echo 0)
+                      jk="online (${jk_views})"
+                    else
+                      jk="offline"
+                    fi
                     # MFC check (fast: 8s WSS connect + parse)
                     mm_result=$(timeout 10 python3 ./check-mfc.py 34721990 2>/dev/null || echo "offline")
                     mm_status=$(echo "$mm_result" | cut -d'|' -f1)

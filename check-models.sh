@@ -106,21 +106,51 @@ publish_frame() {
 }
 
 # Stripchat check: returns "online|URL|VIEWERS|SNAPSHOT|PREVIEW" or "offline"
-# API does NOT have .stream.online — we infer online from .stream.url presence
+# PRIMARY: official Stripchat API (user.user.isLive works even during private/p2p shows)
+# SECONDARY: go.xxxiijmp.com for correct edge-server HLS URL
 check_stripchat() {
     local model="$1"
-    local data
-    data=$(curl -s --max-time 15 "https://go.xxxiijmp.com/api/models?modelsList=${model}&strict=1" 2>/dev/null || echo "")
-    [ -z "$data" ] && { echo "offline"; return; }
 
-    local status
-    status=$(echo "$data" | jq -r '
-        if (.count // 0) > 0 and (.models | length > 0) and (.models[0].stream.url // null) != null then
-            "online|\(.models[0].stream.url)|\(.models[0].viewersCount // 0)|\(.models[0].snapshotUrl // "")|\(.models[0].previewUrl // "")"
-        else "offline" end
-    ' 2>/dev/null)
-    [ -z "$status" ] && status="offline"
-    echo "$status"
+    # Step 1: official API for reliable online detection
+    local official_data
+    official_data=$(curl -s --max-time 10 \
+        "https://stripchat.com/api/front/v2/models/username/${model}/cam" \
+        -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
+        -H "Accept: application/json" 2>/dev/null || echo "")
+
+    local is_live="false"
+    if [ -n "$official_data" ]; then
+        is_live=$(echo "$official_data" | jq -r '.user.user.isLive // false' 2>/dev/null)
+    fi
+
+    if [ "$is_live" != "true" ]; then
+        echo "offline"
+        return
+    fi
+
+    # Step 2: model IS online — get HLS URL from go.xxxiijmp.com
+    local xxx_data hls_url viewers snapshot preview
+    xxx_data=$(curl -s --max-time 10 \
+        "https://go.xxxiijmp.com/api/models?modelsList=${model}&strict=1" 2>/dev/null || echo "")
+
+    hls_url=""
+    viewers=0
+    snapshot=""
+    preview=""
+    if [ -n "$xxx_data" ]; then
+        local count
+        count=$(echo "$xxx_data" | jq -r '.count // 0' 2>/dev/null)
+        if [ "$count" -gt 0 ] 2>/dev/null; then
+            hls_url=$(echo "$xxx_data" | jq -r '.models[0].stream.url // ""' 2>/dev/null)
+            viewers=$(echo "$xxx_data" | jq -r '.models[0].viewersCount // 0' 2>/dev/null)
+            snapshot=$(echo "$xxx_data" | jq -r '.models[0].snapshotUrl // ""' 2>/dev/null)
+            preview=$(echo "$xxx_data" | jq -r '.models[0].previewUrl // ""' 2>/dev/null)
+        fi
+    fi
+
+    [ "$hls_url" = "null" ] && hls_url=""
+
+    echo "online|${hls_url}|${viewers}|${snapshot}|${preview}"
 }
 
 check_bongacams() {
