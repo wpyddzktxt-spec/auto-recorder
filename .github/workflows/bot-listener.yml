@@ -155,6 +155,55 @@ jobs:
                 NEW_STATE=$(echo "$PREV_STATE" | jq -c --arg jk "$CUR_JK" '.JustKatrin = $jk' 2>/dev/null || echo "$PREV_STATE")
                 echo "$NEW_STATE" > "$CHECK_STATE_FILE"
                 bash ./state-store.sh "$CHECK_STATE_FILE" "check_state.json" "check state" >/dev/null 2>&1 || true
+
+                # --- Maddy_May (MFC) check ---
+                PREV_MM=$(echo "$NEW_STATE" | jq -r '.Maddy_May // "offline"' 2>/dev/null)
+                MM_RESULT=$(python3 ./check-mfc.py 34721990 2>/dev/null || echo "offline")
+                CUR_MM=$(echo "$MM_RESULT" | cut -d'|' -f1)
+                MM_URL=$(echo "$MM_RESULT" | cut -d'|' -f2)
+                [ -z "$CUR_MM" ] && CUR_MM="offline"
+                echo "[$(date -u +%H:%M:%S)]   Maddy_May: prev=$PREV_MM cur=$CUR_MM"
+
+                if [ "$CUR_MM" = "online" ] && [ "$PREV_MM" != "online" ]; then
+                  echo "[$(date -u +%H:%M:%S)]   Maddy_May TRANSITION offline->online"
+                  if [ -n "$MM_URL" ]; then
+                    PREVIEW_FILE_MM=/tmp/recorder-state/preview_Maddy_May.jpg
+                    rm -f "$PREVIEW_FILE_MM"
+                    timeout 20 ffmpeg -y -i "$MM_URL" -frames:v 1 -q:v 3 -ss 2 -vf "scale=480:-1" "$PREVIEW_FILE_MM" 2>/dev/null || true
+                    if [ -s "$PREVIEW_FILE_MM" ]; then
+                      cp -f "$PREVIEW_FILE_MM" /tmp/recorder-state/last_frame.jpg
+                      bash ./state-store.sh "$PREVIEW_FILE_MM" "last_frame.jpg" "preview update" >/dev/null 2>&1 || true
+                      curl -s --max-time 15 "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
+                        -F "chat_id=${CHAT_ID}" -F "photo=@${PREVIEW_FILE_MM}" \
+                        -F "caption=🟢 Maddy_May online (MFC)" 2>/dev/null >/dev/null || true
+                    else
+                      curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+                        -d "chat_id=${CHAT_ID}" --data-urlencode "text=🟢 Maddy_May online (MFC)" 2>/dev/null >/dev/null
+                    fi
+                  else
+                    curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+                      -d "chat_id=${CHAT_ID}" --data-urlencode "text=🟢 Maddy_May online (MFC)" 2>/dev/null >/dev/null
+                  fi
+                  # Dispatch record
+                  if [ -n "$MM_URL" ] && [ -n "${GITHUB_TOKEN:-}" ]; then
+                    PAYLOAD_MM=$(jq -n --arg m "Maddy_May" --arg p "myfreecams" --arg h "$MM_URL" --arg r "main" \
+                      '{ref:$r, inputs:{model:$m, provider:$p, hls_url:$h}}')
+                    curl -s -X POST -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                      -H "Accept: application/vnd.github+json" \
+                      "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/record.yml/dispatches" \
+                      -d "$PAYLOAD_MM" 2>/dev/null >/dev/null && echo "  record dispatched"
+                  fi
+                fi
+                if [ "$CUR_MM" = "offline" ] && [ "$PREV_MM" = "online" ]; then
+                  echo "[$(date -u +%H:%M:%S)]   Maddy_May TRANSITION online->offline"
+                  curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+                    -d "chat_id=${CHAT_ID}" --data-urlencode "text=🔴 Maddy_May offline" 2>/dev/null >/dev/null
+                fi
+
+                # Persist state (merged with Maddy_May)
+                NEW_STATE=$(echo "$NEW_STATE" | jq -c --arg mm "$CUR_MM" '.Maddy_May = $mm' 2>/dev/null || echo "$NEW_STATE")
+                echo "$NEW_STATE" > "$CHECK_STATE_FILE"
+                bash ./state-store.sh "$CHECK_STATE_FILE" "check_state.json" "check state" >/dev/null 2>&1 || true
               fi
             fi
             # Long-poll for up to 25s
@@ -229,11 +278,15 @@ jobs:
                         "online (\(.models[0].viewersCount // 0))"
                       else "offline" end' 2>/dev/null)
                     [ -z "$jk" ] && jk="offline"
-                    r="JustKatrin: $jk | moonmaiden: offline"
+                    # MFC check (fast: 8s WSS connect + parse)
+                    mm_result=$(timeout 10 python3 ./check-mfc.py 34721990 2>/dev/null || echo "offline")
+                    mm_status=$(echo "$mm_result" | cut -d'|' -f1)
+                    [ -z "$mm_status" ] && mm_status="offline"
+                    r="JustKatrin: $jk | moonmaiden: offline | Maddy_May: $mm_status"
                     PHOTO=1
                     ;;
                   /models|models)
-                    r="JustKatrin, moonmaiden"
+                    r="JustKatrin, moonmaiden, Maddy_May"
                     PHOTO=1
                     ;;
                   /last|last)

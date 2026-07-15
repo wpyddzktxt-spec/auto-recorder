@@ -127,21 +127,46 @@ check_bongacams() {
     local model="$1"
     local amf_resp
     amf_resp=$(curl -s --max-time 15 -X POST 'https://bongacams.com/tools/amf.php?x-country=en' \
-        -H 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' \
+        -H 'User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36' \
         -H 'Origin: https://bongacams.com' \
         -H 'Referer: https://bongacams.com/' \
+        -H 'X-Requested-With: XMLHttpRequest' \
         -d "method=getRoomData&args[]=${model}&args[]=false" 2>/dev/null || echo "")
 
-    if echo "$amf_resp" | grep -q '"status":"success"'; then
+    if echo "$amf_resp" | grep -q '"status":"success"' && \
+       echo "$amf_resp" | grep -q '"isOnline":true\|"isOnline": true'; then
         local hls_url viewers
-        hls_url=$(echo "$amf_resp" | grep -oP '"videoServerUrl":"[^"]*"' | head -1 | sed 's/"videoServerUrl":"//;s/"//')
-        viewers=$(echo "$amf_resp" | grep -oP '"viewersCount":\d+' | head -1 | sed 's/"viewersCount"://')
+        hls_url=$(echo "$amf_resp" | python3 -c 'import sys,json
+try:
+    d=json.loads(sys.stdin.read())
+    print((d.get("localData") or {}).get("videoServerUrl") or "")
+except Exception: pass' 2>/dev/null)
+        viewers=$(echo "$amf_resp" | python3 -c 'import sys,json
+try:
+    d=json.loads(sys.stdin.read())
+    v=(d.get("performerData") or {}).get("viewersCount") or 0
+    print(int(v))
+except Exception: pass' 2>/dev/null)
         if [ -n "$hls_url" ]; then
+            case "$hls_url" in
+                http://*|https://*) ;;
+                //*) hls_url="https:${hls_url}" ;;
+                *)  hls_url="https://${hls_url}" ;;
+            esac
             echo "online|${hls_url}/hls/stream_${model}/playlist.m3u8|${viewers:-0}||"
             return
         fi
     fi
     echo "offline"
+}
+
+# MyFreeCams check: uses Python WebSocket script
+# method format: "ws:MODEL_UID"
+check_myfreecams() {
+    local model="$1"
+    local uid="$2"
+    local script_dir="${SCRIPT_DIR}"
+    python3 "${script_dir}/check-mfc.py" "$uid" 2>/dev/null || echo "offline"
 }
 
 # ---------- main ----------
@@ -159,12 +184,11 @@ while IFS='|' read -r model provider method; do
     model=$(echo "$model" | xargs)
     provider=$(echo "$provider" | xargs)
     [ -n "$FILTER_MODEL" ] && [ "$model" != "$FILTER_MODEL" ] && continue
-    MODELS+=("$model|$provider")
+    MODELS+=("$model|$provider|$method")
 done < models.txt
 
 for entry in "${MODELS[@]}"; do
-    model="${entry%|*}"
-    provider="${entry#*|}"
+    IFS='|' read -r model provider method <<< "$entry"
 
     # If this model is currently being recorded (state file on this runner), skip
     if [ -f "${STATE_DIR}/state_${model}" ]; then
@@ -180,6 +204,12 @@ for entry in "${MODELS[@]}"; do
     case "$provider" in
         stripchat) result=$(check_stripchat "$model") ;;
         bongacams) result=$(check_bongacams "$model") ;;
+        myfreecams)
+            # Extract UID from method field (format: "ws:MODEL_UID")
+            mfc_uid=$(echo "$method" | sed 's/^ws://')
+            [ -z "$mfc_uid" ] && { log "[$model] no MFC UID in method '$method', skipping"; continue; }
+            result=$(check_myfreecams "$model" "$mfc_uid")
+            ;;
         *) log "[$model] unknown provider '$provider', skipping"; continue ;;
     esac
 

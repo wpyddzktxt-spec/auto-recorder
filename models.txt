@@ -1,6 +1,7 @@
 # Model list for auto-recorder
 # Format: username|provider|method
-# provider: stripchat, bongacams
-# method: api, amf, mobile (detection method)
+# provider: stripchat, bongacams, myfreecams
+# method: api (stripchat), amf (bongacams), ws:UID (myfreecams)
 JustKatrin|stripchat|api
 moonmaiden|bongacams|amf
+Maddy_May|myfreecams|ws:34721990
