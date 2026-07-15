@@ -91,6 +91,12 @@ jobs:
           MONITOR_TICK=12        # 12 × 25s = 5 min
           LAST_MONITOR=0
           CHECK_STATE_FILE=/tmp/recorder-state/check_state.json
+          # Per-session dispatch tracking: prevent duplicate recordings within one listener run
+          DISPATCH_FLAG_JK=/tmp/recorder-state/dispatched_JustKatrin
+          DISPATCH_FLAG_MN=/tmp/recorder-state/dispatched_moonmaiden
+          DISPATCH_FLAG_MM=/tmp/recorder-state/dispatched_Maddy_May
+          # In-memory state (survives state-fetch failures — never fall back to all-offline)
+          MEM_STATE='{"JustKatrin":"offline","moonmaiden":"offline","Maddy_May":"offline"}'
           while [ "$(date +%s)" -lt "$END" ]; do
             ITER=$((ITER + 1))
             # ---- monitor tick: detect online/offline transitions ----
@@ -99,10 +105,13 @@ jobs:
               if [ $((NOW_TS - LAST_MONITOR)) -ge 280 ]; then
                 LAST_MONITOR=$NOW_TS
                 echo "[$(date -u +%H:%M:%S)] MONITOR tick"
-                # Load previous state (cross-runner) from 'state' branch
-                PREV_STATE='{"JustKatrin":"offline","moonmaiden":"offline","Maddy_May":"offline"}'
+                # Load persistent state from 'state' branch (best-effort)
+                # On failure, keep in-memory MEM_STATE — NEVER fall back to all-offline default
                 if timeout 5 bash ./state-fetch.sh check_state.json "$CHECK_STATE_FILE" >/dev/null 2>&1 && [ -s "$CHECK_STATE_FILE" ]; then
                   PREV_STATE=$(cat "$CHECK_STATE_FILE")
+                  MEM_STATE="$PREV_STATE"
+                else
+                  PREV_STATE="$MEM_STATE"
                 fi
                 PREV_JK=$(echo "$PREV_STATE" | jq -r '.JustKatrin // "offline"' 2>/dev/null)
                 # Query current JustKatrin status via official Stripchat API
@@ -145,9 +154,11 @@ jobs:
                   fi
                 fi
                 echo "[$(date -u +%H:%M:%S)]   JustKatrin: prev=$PREV_JK cur=$CUR_JK viewers=$VIEWERS"
-                # Transition offline -> online
-                if [ "$CUR_JK" = "online" ] && [ "$PREV_JK" != "online" ]; then
-                  echo "[$(date -u +%H:%M:%S)]   TRANSITION offline->online — notify + dispatch record"
+                # Dispatch recording if online AND not already dispatched this session
+                # (No transition needed — catches models that were already online when listener started)
+                if [ "$CUR_JK" = "online" ] && [ ! -f "$DISPATCH_FLAG_JK" ]; then
+                  echo "[$(date -u +%H:%M:%S)]   JustKatrin ONLINE — notify + dispatch record"
+                  touch "$DISPATCH_FLAG_JK"
                   # Extract a fresh preview from HLS
                   PREVIEW_FILE=/tmp/recorder-state/preview_JustKatrin.jpg
                   rm -f "$PREVIEW_FILE"
@@ -174,11 +185,16 @@ jobs:
                       -d "$PAYLOAD" 2>/dev/null >/dev/null && echo "  record dispatched"
                   fi
                 fi
-                # Transition online -> offline
+                # Detect and notify online->offline transition
                 if [ "$CUR_JK" = "offline" ] && [ "$PREV_JK" = "online" ]; then
-                  echo "[$(date -u +%H:%M:%S)]   TRANSITION online->offline"
+                  echo "[$(date -u +%H:%M:%S)]   JustKatrin OFFLINE"
+                  rm -f "$DISPATCH_FLAG_JK"
                   curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
                     -d "chat_id=${CHAT_ID}" --data-urlencode "text=🔴 JustKatrin offline" 2>/dev/null >/dev/null
+                fi
+                # Reset dispatch flag whenever offline (covers state-fetch failure edge case)
+                if [ "$CUR_JK" = "offline" ]; then
+                  rm -f "$DISPATCH_FLAG_JK"
                 fi
                 # Persist state
                 NEW_STATE=$(echo "$PREV_STATE" | jq -c --arg jk "$CUR_JK" '.JustKatrin = $jk' 2>/dev/null || echo "$PREV_STATE")
@@ -206,8 +222,9 @@ jobs:
                 fi
                 echo "[$(date -u +%H:%M:%S)]   moonmaiden: prev=$PREV_MN cur=$CUR_MN viewers=$MN_VIEWERS"
 
-                if [ "$CUR_MN" = "online" ] && [ "$PREV_MN" != "online" ]; then
-                  echo "[$(date -u +%H:%M:%S)]   moonmaiden TRANSITION offline->online"
+                if [ "$CUR_MN" = "online" ] && [ ! -f "$DISPATCH_FLAG_MN" ]; then
+                  echo "[$(date -u +%H:%M:%S)]   moonmaiden ONLINE — notify + dispatch record"
+                  touch "$DISPATCH_FLAG_MN"
                   if [ -n "$MN_HLS" ]; then
                     PREVIEW_FILE_MN=/tmp/recorder-state/preview_moonmaiden.jpg
                     rm -f "$PREVIEW_FILE_MN"
@@ -237,9 +254,13 @@ jobs:
                   fi
                 fi
                 if [ "$CUR_MN" = "offline" ] && [ "$PREV_MN" = "online" ]; then
-                  echo "[$(date -u +%H:%M:%S)]   moonmaiden TRANSITION online->offline"
+                  echo "[$(date -u +%H:%M:%S)]   moonmaiden OFFLINE"
+                  rm -f "$DISPATCH_FLAG_MN"
                   curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
                     -d "chat_id=${CHAT_ID}" --data-urlencode "text=🔴 moonmaiden offline" 2>/dev/null >/dev/null
+                fi
+                if [ "$CUR_MN" = "offline" ]; then
+                  rm -f "$DISPATCH_FLAG_MN"
                 fi
 
                 # Persist state (merged with moonmaiden)
@@ -255,8 +276,9 @@ jobs:
                 [ -z "$CUR_MM" ] && CUR_MM="offline"
                 echo "[$(date -u +%H:%M:%S)]   Maddy_May: prev=$PREV_MM cur=$CUR_MM"
 
-                if [ "$CUR_MM" = "online" ] && [ "$PREV_MM" != "online" ]; then
-                  echo "[$(date -u +%H:%M:%S)]   Maddy_May TRANSITION offline->online"
+                if [ "$CUR_MM" = "online" ] && [ ! -f "$DISPATCH_FLAG_MM" ]; then
+                  echo "[$(date -u +%H:%M:%S)]   Maddy_May ONLINE — notify + dispatch record"
+                  touch "$DISPATCH_FLAG_MM"
                   if [ -n "$MM_URL" ]; then
                     PREVIEW_FILE_MM=/tmp/recorder-state/preview_Maddy_May.jpg
                     rm -f "$PREVIEW_FILE_MM"
@@ -286,9 +308,13 @@ jobs:
                   fi
                 fi
                 if [ "$CUR_MM" = "offline" ] && [ "$PREV_MM" = "online" ]; then
-                  echo "[$(date -u +%H:%M:%S)]   Maddy_May TRANSITION online->offline"
+                  echo "[$(date -u +%H:%M:%S)]   Maddy_May OFFLINE"
+                  rm -f "$DISPATCH_FLAG_MM"
                   curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
                     -d "chat_id=${CHAT_ID}" --data-urlencode "text=🔴 Maddy_May offline" 2>/dev/null >/dev/null
+                fi
+                if [ "$CUR_MM" = "offline" ]; then
+                  rm -f "$DISPATCH_FLAG_MM"
                 fi
 
                 # Persist state (merged with Maddy_May)
