@@ -16,19 +16,31 @@ echo "$UPDATES" | jq -r '.result[]? | "\(.update_id)|\(.message.chat.id // "")|\
     case "$text_lower" in
         /status|status)
             # JustKatrin (Stripchat) — official API detects private/p2p shows too
+            # Fallback: go.xxxiijmp.com if official API is blocked (returns HTML)
             jk_official=$(curl -s --max-time 8 \
               "https://stripchat.com/api/front/v2/models/username/JustKatrin/cam" \
               -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
               -H "Accept: application/json" 2>/dev/null || echo "")
-            jk_is_live=$(echo "$jk_official" | jq -r '.user.user.isLive // false' 2>/dev/null)
-            if [ "$jk_is_live" = "true" ]; then
-              # Get viewers from go.xxxiijmp.com (may be 0 during private shows)
-              jk_views=$(curl -s --max-time 5 \
-                "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null | \
-                jq -r '.models[0].viewersCount // 0' 2>/dev/null || echo 0)
-              jk="🟢 online (${jk_views} зр.)"
+            if [ -n "$jk_official" ] && echo "$jk_official" | grep -q '^[[:space:]]*{'; then
+              jk_is_live=$(echo "$jk_official" | jq -r '.user.user.isLive // false' 2>/dev/null)
+              if [ "$jk_is_live" = "true" ]; then
+                # Get viewers from go.xxxiijmp.com (may be 0 during private shows)
+                jk_views=$(curl -s --max-time 5 \
+                  "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null | \
+                  jq -r '.models[0].viewersCount // 0' 2>/dev/null || echo 0)
+                jk="🟢 online (${jk_views} зр.)"
+              else
+                jk="🔴 оффлайн"
+              fi
             else
-              jk="🔴 оффлайн"
+              # Fallback: official API blocked — use go.xxxiijmp.com
+              jk_data=$(curl -s --max-time 5 \
+                "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null || echo "")
+              jk=$(echo "$jk_data" | jq -r '
+                if (.count // 0) > 0 and .models[0].stream.url != null then
+                  "🟢 online (\(.models[0].viewersCount // 0) зр.)"
+                else "🔴 оффлайн" end' 2>/dev/null)
+              [ -z "$jk" ] && jk="🔴 оффлайн"
             fi
 
             # moonmaiden (BongaCams) — AMF for isOnline, mybro API for viewers

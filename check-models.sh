@@ -107,7 +107,7 @@ publish_frame() {
 
 # Stripchat check: returns "online|URL|VIEWERS|SNAPSHOT|PREVIEW" or "offline"
 # PRIMARY: official Stripchat API (user.user.isLive works even during private/p2p shows)
-# SECONDARY: go.xxxiijmp.com for correct edge-server HLS URL
+# FALLBACK: go.xxxiijmp.com — used if official API returns non-JSON (blocked/Cloudflare)
 check_stripchat() {
     local model="$1"
 
@@ -119,8 +119,28 @@ check_stripchat() {
         -H "Accept: application/json" 2>/dev/null || echo "")
 
     local is_live="false"
-    if [ -n "$official_data" ]; then
+    local official_valid="false"
+    # Check if response is actually JSON (Cloudflare can return HTML even with browser UA)
+    if [ -n "$official_data" ] && echo "$official_data" | grep -q '^[[:space:]]*{'; then
+        official_valid="true"
         is_live=$(echo "$official_data" | jq -r '.user.user.isLive // false' 2>/dev/null)
+    fi
+
+    # If official API blocked (non-JSON response), fall back to go.xxxiijmp.com
+    if [ "$official_valid" != "true" ]; then
+        local xxx_data
+        xxx_data=$(curl -s --max-time 10 \
+            "https://go.xxxiijmp.com/api/models?modelsList=${model}&strict=1" 2>/dev/null || echo "")
+        [ -z "$xxx_data" ] && { echo "offline"; return; }
+        local status
+        status=$(echo "$xxx_data" | jq -r '
+            if (.count // 0) > 0 and (.models | length > 0) and (.models[0].stream.url // null) != null then
+                "online|\(.models[0].stream.url)|\(.models[0].viewersCount // 0)|\(.models[0].snapshotUrl // "")|\(.models[0].previewUrl // "")"
+            else "offline" end
+        ' 2>/dev/null)
+        [ -z "$status" ] && status="offline"
+        echo "$status"
+        return
     fi
 
     if [ "$is_live" != "true" ]; then
@@ -152,7 +172,6 @@ check_stripchat() {
 
     echo "online|${hls_url}|${viewers}|${snapshot}|${preview}"
 }
-
 check_bongacams() {
     local model="$1"
     local amf_resp

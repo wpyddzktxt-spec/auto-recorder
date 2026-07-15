@@ -106,7 +106,7 @@ jobs:
                 fi
                 PREV_JK=$(echo "$PREV_STATE" | jq -r '.JustKatrin // "offline"' 2>/dev/null)
                 # Query current JustKatrin status via official Stripchat API
-                # (go.xxxiijmp.com misses models in private/p2p shows)
+                # Fallback: go.xxxiijmp.com (if official API blocked/returns HTML)
                 JK_OFFICIAL=$(curl -s --max-time 8 \
                   "https://stripchat.com/api/front/v2/models/username/JustKatrin/cam" \
                   -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
@@ -114,15 +114,31 @@ jobs:
                 CUR_JK="offline"
                 JK_URL=""
                 VIEWERS=0
-                IS_LIVE=$(echo "$JK_OFFICIAL" | jq -r '.user.user.isLive // false' 2>/dev/null)
-                if [ "$IS_LIVE" = "true" ]; then
-                  CUR_JK="online"
-                  # Get HLS URL from go.xxxiijmp.com (provides correct edge server)
+                # Check if official API returned valid JSON (Cloudflare may block with HTML)
+                if [ -n "$JK_OFFICIAL" ] && echo "$JK_OFFICIAL" | grep -q '^[[:space:]]*{'; then
+                  IS_LIVE=$(echo "$JK_OFFICIAL" | jq -r '.user.user.isLive // false' 2>/dev/null)
+                  if [ "$IS_LIVE" = "true" ]; then
+                    CUR_JK="online"
+                    # Get HLS URL from go.xxxiijmp.com (provides correct edge server)
+                    JK_DATA=$(curl -s --max-time 8 \
+                      "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null || echo "")
+                    if [ -n "$JK_DATA" ]; then
+                      JK_COUNT=$(echo "$JK_DATA" | jq -r '.count // 0' 2>/dev/null)
+                      if [ "$JK_COUNT" -gt 0 ] 2>/dev/null; then
+                        JK_URL=$(echo "$JK_DATA" | jq -r '.models[0].stream.url // ""' 2>/dev/null)
+                        VIEWERS=$(echo "$JK_DATA" | jq -r '.models[0].viewersCount // 0' 2>/dev/null)
+                      fi
+                    fi
+                  fi
+                else
+                  # Official API blocked — fall back to go.xxxiijmp.com
                   JK_DATA=$(curl -s --max-time 8 \
                     "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null || echo "")
                   if [ -n "$JK_DATA" ]; then
                     JK_COUNT=$(echo "$JK_DATA" | jq -r '.count // 0' 2>/dev/null)
                     if [ "$JK_COUNT" -gt 0 ] 2>/dev/null; then
+                      ONLINE=$(echo "$JK_DATA" | jq -r 'if .models[0].stream.url != null then "online" else "offline" end' 2>/dev/null)
+                      CUR_JK="$ONLINE"
                       JK_URL=$(echo "$JK_DATA" | jq -r '.models[0].stream.url // ""' 2>/dev/null)
                       VIEWERS=$(echo "$JK_DATA" | jq -r '.models[0].viewersCount // 0' 2>/dev/null)
                     fi
@@ -359,14 +375,26 @@ except Exception: pass' 2>/dev/null)
                       "https://stripchat.com/api/front/v2/models/username/JustKatrin/cam" \
                       -H "User-Agent: Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36" \
                       -H "Accept: application/json" 2>/dev/null || echo "")
-                    jk_is_live=$(echo "$jk_official" | jq -r '.user.user.isLive // false' 2>/dev/null)
-                    if [ "$jk_is_live" = "true" ]; then
-                      jk_views=$(curl -s --max-time 5 \
-                        "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null | \
-                        jq -r '.models[0].viewersCount // 0' 2>/dev/null || echo 0)
-                      jk="online (${jk_views})"
+                    # Check if official API returned valid JSON (may be blocked by Cloudflare)
+                    if [ -n "$jk_official" ] && echo "$jk_official" | grep -q '^[[:space:]]*{'; then
+                      jk_is_live=$(echo "$jk_official" | jq -r '.user.user.isLive // false' 2>/dev/null)
+                      if [ "$jk_is_live" = "true" ]; then
+                        jk_views=$(curl -s --max-time 5 \
+                          "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null | \
+                          jq -r '.models[0].viewersCount // 0' 2>/dev/null || echo 0)
+                        jk="online (${jk_views})"
+                      else
+                        jk="offline"
+                      fi
                     else
-                      jk="offline"
+                      # Fallback: official API blocked, use go.xxxiijmp.com
+                      jk_data=$(curl -s --max-time 5 \
+                        "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null || echo "")
+                      jk=$(echo "$jk_data" | jq -r '
+                        if (.count // 0) > 0 and .models[0].stream.url != null then
+                          "online (\(.models[0].viewersCount // 0))"
+                        else "offline" end' 2>/dev/null)
+                      [ -z "$jk" ] && jk="offline"
                     fi
                     # MFC check (fast: 8s WSS connect + parse)
                     mm_result=$(timeout 10 python3 ./check-mfc.py 34721990 2>/dev/null || echo "offline")
