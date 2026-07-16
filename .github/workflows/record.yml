@@ -44,7 +44,9 @@ jobs:
 
       - name: Install tools
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq curl jq ffmpeg streamlink 2>/dev/null
+          sudo apt-get update -qq && sudo apt-get install -y -qq curl jq ffmpeg 2>/dev/null
+          pip3 install --quiet --upgrade streamlink
+          echo "streamlink=$(streamlink --version 2>&1 | head -1)"
 
       - name: Setup state
         run: mkdir -p $STATE_DIR

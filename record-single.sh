@@ -45,14 +45,14 @@ while true; do
 
     RECORD_OK=false
     if streamlink --version >/dev/null 2>&1; then
-        if timeout ${CHUNK_DURATION} streamlink --hls-live-edge 3 --retry-streams 3 --retry-max 3 --stdout "$HLS_URL" best 2>/dev/null | \
-            timeout ${CHUNK_DURATION} ffmpeg -y -i pipe:0 -c copy -movflags +faststart -f mp4 "$OUTFILE" 2>/dev/null; then
+        if timeout ${CHUNK_DURATION} streamlink --hls-live-edge 3 --retry-streams 3 --retry-max 3 --stdout "$HLS_URL" best 2>&1 | \
+            timeout ${CHUNK_DURATION} ffmpeg -y -i pipe:0 -c copy -movflags +faststart -f mp4 "$OUTFILE" 2>&1; then
             RECORD_OK=true
         fi
     fi
 
     if [ "$RECORD_OK" != "true" ]; then
-        if timeout ${CHUNK_DURATION} ffmpeg -y -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 10 -i "$HLS_URL" -c copy -movflags +faststart -f mp4 "$OUTFILE" 2>/dev/null; then
+        if timeout ${CHUNK_DURATION} ffmpeg -y -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 -reconnect_delay_max 10 -i "$HLS_URL" -c copy -movflags +faststart -f mp4 "$OUTFILE" 2>&1; then
             RECORD_OK=true
         fi
     fi
