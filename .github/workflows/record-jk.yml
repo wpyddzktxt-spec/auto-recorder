@@ -74,12 +74,7 @@ jobs:
           while [ $(( $(date +%s) - START )) -lt $MAX_DURATION ]; do
             OUTFILE="${WORK_DIR}/jk_$(printf '%03d' $CHUNK).mp4"
             
-            # First 3 chunks: 60s (fast capture), rest: 600s
-            if [ $CHUNK -lt 3 ]; then
-              CHUNK_DUR=60
-            else
-              CHUNK_DUR=600
-            fi
+            CHUNK_DUR=600
 
             # Record chunk (timeout exit 124 is NORMAL — we check file size instead)
             OK=false
