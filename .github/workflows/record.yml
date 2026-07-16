@@ -61,13 +61,29 @@ jobs:
             "${{ github.event.inputs.hls_url }}" \
             "${{ github.event.inputs.max_duration }}"
 
-      - name: Notify offline
+      - name: Self-dispatch (continue if still live)
         if: always()
         run: |
-          if [ -f $STATE_DIR/recording_ended_${{ github.event.inputs.model }} ]; then
-            END_TYPE=$(cat $STATE_DIR/recording_ended_${{ github.event.inputs.model }})
-            curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-              -d "chat_id=${CHAT_ID}" \
-              -d "text=🔴 ${{ github.event.inputs.model }} запись завершена (${END_TYPE})" \
-              -d "disable_notification=true" 2>/dev/null
+          MODEL="${{ github.event.inputs.model }}"
+          PROVIDER="${{ github.event.inputs.provider }}"
+          echo "Checking if ${MODEL} is still live..."
+          
+          if [ "$PROVIDER" = "stripchat" ]; then
+            DATA=$(curl -s --max-time 8 "https://go.xxxiijmp.com/api/models?modelsList=${MODEL}&strict=1" 2>/dev/null || echo '{"count":0}')
+            COUNT=$(echo "$DATA" | jq -r '.count // 0' 2>/dev/null)
+            if [ "$COUNT" != "0" ] && [ -n "$COUNT" ]; then
+              HLS=$(echo "$DATA" | jq -r '.models[0].stream.url // ""' 2>/dev/null)
+              HLS_OK=$(curl -sI --max-time 10 "$HLS" 2>/dev/null | head -1 | grep -c '200\|302' || echo 0)
+              if [ "$HLS_OK" != "0" ]; then
+                echo "Still live! Re-dispatching..."
+                curl -s -X POST \
+                  -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                  -H "Accept: application/vnd.github+json" \
+                  "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/record.yml/dispatches" \
+                  -d "$(jq -n --arg m "$MODEL" --arg p "$PROVIDER" --arg h "$HLS" --arg r "main" \
+                    '{ref:$r, inputs:{model:$m, provider:$p, hls_url:$h}}')" 2>/dev/null
+                echo "Re-dispatched"
+              fi
+            fi
           fi
+          echo "Self-dispatch check complete"
