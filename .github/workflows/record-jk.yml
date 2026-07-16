@@ -29,7 +29,7 @@ jobs:
       - name: Check & Record
         run: |
           trap 'echo "[$(date -u +%H:%M:%S)] EXIT"' EXIT
-          set -euo pipefail
+          # NO set -e — we handle errors manually
           MODEL="JustKatrin"
           MAX_DURATION=20400
           WORK_DIR="/tmp/rec_${MODEL}"
