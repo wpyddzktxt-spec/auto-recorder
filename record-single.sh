@@ -50,12 +50,18 @@ RETRY_COUNT=0
 LAST_FRAME="${STATE_DIR}/last_frame.jpg"
 NOTIFIED_START=false
 
+# Fast mode: first 3 chunks are 60s each for quick-start models (JustKatrin)
+FAST_CHUNKS=3
 while true; do
     ELAPSED=$(( $(date +%s) - START_TIME ))
     [ "$ELAPSED" -ge "$MAX_DURATION" ] && break
 
     OUTFILE="${WORK_DIR}/${MODEL}_chunk_$(printf '%03d' $CHUNK_INDEX).mp4"
-    CHUNK_DURATION=600
+    if [ "$CHUNK_INDEX" -lt "$FAST_CHUNKS" ]; then
+        CHUNK_DURATION=60
+    else
+        CHUNK_DURATION=600
+    fi
 
     RECORD_OK=false
 
@@ -78,7 +84,9 @@ while true; do
         fi
     fi
 
-    if [ "$RECORD_OK" = "true" ] && [ -f "$OUTFILE" ] && [ "$(stat -c%s "$OUTFILE" 2>/dev/null || echo 0)" -gt 1024 ]; then
+    if [ "$RECORD_OK" = "true" ] && [ -f "$OUTFILE" ]; then
+        CHUNK_SIZE=$(stat -c%s "$OUTFILE" 2>/dev/null || echo 0)
+        if [ "$CHUNK_SIZE" -gt 1024 ]; then
         if [ "$NOTIFIED_START" != "true" ]; then
             send_tg "📹 ${MODEL} запись началась" "false"
             NOTIFIED_START=true
@@ -108,6 +116,10 @@ while true; do
             rm -f "$OUTFILE"
             CHUNK_INDEX=$((CHUNK_INDEX + 1))
             RETRY_COUNT=0
+            fi
+        else
+            echo "[$(date -u +%H:%M:%S)] ${MODEL}: chunk too small (${CHUNK_SIZE} bytes), skipping"
+            rm -f "$OUTFILE"
         fi
     else
         rm -f "$OUTFILE"
