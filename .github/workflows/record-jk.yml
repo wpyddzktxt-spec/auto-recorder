@@ -1,5 +1,6 @@
 name: Record JustKatrin
 on:
+# v6.31.1 — schedule kick
   schedule:
     - cron: '*/2 * * * *'
   workflow_dispatch:
