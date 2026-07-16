@@ -157,32 +157,41 @@ jobs:
                 # Dispatch recording if online AND not already dispatched this session
                 # (No transition needed — catches models that were already online when listener started)
                 if [ "$CUR_JK" = "online" ] && [ ! -f "$DISPATCH_FLAG_JK" ]; then
-                  echo "[$(date -u +%H:%M:%S)]   JustKatrin ONLINE — notify + dispatch record"
-                  touch "$DISPATCH_FLAG_JK"
-                  # Extract a fresh preview from HLS
-                  PREVIEW_FILE=/tmp/recorder-state/preview_JustKatrin.jpg
-                  rm -f "$PREVIEW_FILE"
+                  # Only act if there's a real HLS URL (count>0 = public show)
                   if [ -n "$JK_URL" ]; then
-                    timeout 20 ffmpeg -y -i "$JK_URL" -frames:v 1 -q:v 3 -ss 2 -vf "scale=480:-1" "$PREVIEW_FILE" 2>/dev/null || true
-                    if [ -s "$PREVIEW_FILE" ]; then
-                      cp -f "$PREVIEW_FILE" /tmp/recorder-state/last_frame.jpg
-                      bash ./state-store.sh "$PREVIEW_FILE" "last_frame.jpg" "preview update" >/dev/null 2>&1 || true
-                      curl -s --max-time 15 "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
-                        -F "chat_id=${CHAT_ID}" -F "photo=@${PREVIEW_FILE}" \
-                        -F "caption=🟢 JustKatrin online (${VIEWERS} зр.)" 2>/dev/null >/dev/null || true
+                    # Validate HLS URL is accessible before dispatching
+                    HLS_OK=$(curl -sI --max-time 10 "$JK_URL" 2>/dev/null | head -1 | grep -c '200\|302' || echo 0)
+                    if [ "$HLS_OK" -gt 0 ]; then
+                      echo "[$(date -u +%H:%M:%S)]   JustKatrin ONLINE (public, ${VIEWERS} зр.) — notify + dispatch record"
+                      touch "$DISPATCH_FLAG_JK"
+                      # Extract a fresh preview from HLS
+                      PREVIEW_FILE=/tmp/recorder-state/preview_JustKatrin.jpg
+                      rm -f "$PREVIEW_FILE"
+                      timeout 20 ffmpeg -y -i "$JK_URL" -frames:v 1 -q:v 3 -ss 2 -vf "scale=480:-1" "$PREVIEW_FILE" 2>/dev/null || true
+                      if [ -s "$PREVIEW_FILE" ]; then
+                        cp -f "$PREVIEW_FILE" /tmp/recorder-state/last_frame.jpg
+                        bash ./state-store.sh "$PREVIEW_FILE" "last_frame.jpg" "preview update" >/dev/null 2>&1 || true
+                        curl -s --max-time 15 "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
+                          -F "chat_id=${CHAT_ID}" -F "photo=@${PREVIEW_FILE}" \
+                          -F "caption=🟢 JustKatrin online (${VIEWERS} зр.)" 2>/dev/null >/dev/null || true
+                      else
+                        curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+                          -d "chat_id=${CHAT_ID}" --data-urlencode "text=🟢 JustKatrin online (${VIEWERS} зр.)" 2>/dev/null >/dev/null
+                      fi
+                      # Dispatch record
+                      if [ -n "${GITHUB_TOKEN:-}" ]; then
+                        PAYLOAD=$(jq -n --arg m "JustKatrin" --arg p "stripchat" --arg h "$JK_URL" --arg r "main" \
+                          '{ref:$r, inputs:{model:$m, provider:$p, hls_url:$h}}')
+                        curl -s -X POST -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                          -H "Accept: application/vnd.github+json" \
+                          "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/record.yml/dispatches" \
+                          -d "$PAYLOAD" 2>/dev/null >/dev/null && echo "  record dispatched"
+                      fi
                     else
-                      curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-                        -d "chat_id=${CHAT_ID}" --data-urlencode "text=🟢 JustKatrin online (${VIEWERS} зр.)" 2>/dev/null >/dev/null
+                      echo "[$(date -u +%H:%M:%S)]   JustKatrin HLS URL unreachable ($JK_URL) — skip"
                     fi
-                  fi
-                  # Dispatch record
-                  if [ -n "$JK_URL" ] && [ -n "${GITHUB_TOKEN:-}" ]; then
-                    PAYLOAD=$(jq -n --arg m "JustKatrin" --arg p "stripchat" --arg h "$JK_URL" --arg r "main" \
-                      '{ref:$r, inputs:{model:$m, provider:$p, hls_url:$h}}')
-                    curl -s -X POST -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-                      -H "Accept: application/vnd.github+json" \
-                      "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/record.yml/dispatches" \
-                      -d "$PAYLOAD" 2>/dev/null >/dev/null && echo "  record dispatched"
+                  else
+                    echo "[$(date -u +%H:%M:%S)]   JustKatrin ONLINE but NO HLS URL (private/p2p) — skip"
                   fi
                 fi
                 # Detect and notify online->offline transition
