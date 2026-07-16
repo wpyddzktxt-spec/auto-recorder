@@ -81,25 +81,23 @@ jobs:
               CHUNK_DUR=600
             fi
 
-            # Record chunk
+            # Record chunk (timeout exit 124 is NORMAL — we check file size instead)
             OK=false
-            if timeout ${CHUNK_DUR} streamlink --loglevel error --hls-live-edge 3 --retry-streams 2 --retry-max 1 --stdout "$HLS" best 2>/dev/null | \
-               timeout ${CHUNK_DUR} ffmpeg -y -i pipe:0 -c copy -movflags +faststart -f mp4 "$OUTFILE" 2>/dev/null; then
-              SIZE=$(stat -c%s "$OUTFILE" 2>/dev/null || echo 0)
-              if [ "$SIZE" -gt 4096 ]; then
-                OK=true
-              fi
+            timeout ${CHUNK_DUR} streamlink --loglevel error --hls-live-edge 3 --retry-streams 2 --retry-max 1 --stdout "$HLS" best 2>/dev/null | \
+               timeout ${CHUNK_DUR} ffmpeg -y -i pipe:0 -c copy -movflags +faststart -f mp4 "$OUTFILE" 2>/dev/null || true
+            SIZE=$(stat -c%s "$OUTFILE" 2>/dev/null || echo 0)
+            if [ "$SIZE" -gt 4096 ]; then
+              OK=true
             fi
 
             # Fallback: ffmpeg direct
             if [ "$OK" != "true" ]; then
               rm -f "$OUTFILE"
-              if timeout ${CHUNK_DUR} ffmpeg -y -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 \
-                -reconnect_delay_max 10 -i "$HLS" -c copy -movflags +faststart -f mp4 "$OUTFILE" 2>/dev/null; then
-                SIZE=$(stat -c%s "$OUTFILE" 2>/dev/null || echo 0)
-                if [ "$SIZE" -gt 4096 ]; then
-                  OK=true
-                fi
+              timeout ${CHUNK_DUR} ffmpeg -y -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 \
+                -reconnect_delay_max 10 -i "$HLS" -c copy -movflags +faststart -f mp4 "$OUTFILE" 2>/dev/null || true
+              SIZE=$(stat -c%s "$OUTFILE" 2>/dev/null || echo 0)
+              if [ "$SIZE" -gt 4096 ]; then
+                OK=true
               fi
             fi
 
