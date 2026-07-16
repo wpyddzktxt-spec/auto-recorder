@@ -232,34 +232,38 @@ jobs:
                 echo "[$(date -u +%H:%M:%S)]   moonmaiden: prev=$PREV_MN cur=$CUR_MN viewers=$MN_VIEWERS"
 
                 if [ "$CUR_MN" = "online" ] && [ ! -f "$DISPATCH_FLAG_MN" ]; then
-                  echo "[$(date -u +%H:%M:%S)]   moonmaiden ONLINE — notify + dispatch record"
-                  touch "$DISPATCH_FLAG_MN"
                   if [ -n "$MN_HLS" ]; then
-                    PREVIEW_FILE_MN=/tmp/recorder-state/preview_moonmaiden.jpg
-                    rm -f "$PREVIEW_FILE_MN"
-                    timeout 20 ffmpeg -y -i "$MN_HLS" -frames:v 1 -q:v 3 -ss 2 -vf "scale=480:-1" "$PREVIEW_FILE_MN" 2>/dev/null || true
-                    if [ -s "$PREVIEW_FILE_MN" ]; then
-                      cp -f "$PREVIEW_FILE_MN" /tmp/recorder-state/last_frame.jpg
-                      bash ./state-store.sh "$PREVIEW_FILE_MN" "last_frame.jpg" "preview update" >/dev/null 2>&1 || true
-                      curl -s --max-time 15 "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
-                        -F "chat_id=${CHAT_ID}" -F "photo=@${PREVIEW_FILE_MN}" \
-                        -F "caption=🟢 moonmaiden online (${MN_VIEWERS} зр.)" 2>/dev/null >/dev/null || true
+                    HLS_OK_MN=$(curl -sI --max-time 10 "$MN_HLS" 2>/dev/null | head -1 | grep -c '200\|302' || echo 0)
+                    if [ "$HLS_OK_MN" -gt 0 ]; then
+                      echo "[$(date -u +%H:%M:%S)]   moonmaiden ONLINE (has HLS, ${MN_VIEWERS} зр.) — notify + dispatch record"
+                      touch "$DISPATCH_FLAG_MN"
+                      PREVIEW_FILE_MN=/tmp/recorder-state/preview_moonmaiden.jpg
+                      rm -f "$PREVIEW_FILE_MN"
+                      timeout 20 ffmpeg -y -i "$MN_HLS" -frames:v 1 -q:v 3 -ss 2 -vf "scale=480:-1" "$PREVIEW_FILE_MN" 2>/dev/null || true
+                      if [ -s "$PREVIEW_FILE_MN" ]; then
+                        cp -f "$PREVIEW_FILE_MN" /tmp/recorder-state/last_frame.jpg
+                        bash ./state-store.sh "$PREVIEW_FILE_MN" "last_frame.jpg" "preview update" >/dev/null 2>&1 || true
+                        curl -s --max-time 15 "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
+                          -F "chat_id=${CHAT_ID}" -F "photo=@${PREVIEW_FILE_MN}" \
+                          -F "caption=🟢 moonmaiden online (${MN_VIEWERS} зр.)" 2>/dev/null >/dev/null || true
+                      else
+                        curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+                          -d "chat_id=${CHAT_ID}" --data-urlencode "text=🟢 moonmaiden online (${MN_VIEWERS} зр.)" 2>/dev/null >/dev/null
+                      fi
+                      # Dispatch record
+                      if [ -n "${GITHUB_TOKEN:-}" ]; then
+                        PAYLOAD_MN=$(jq -n --arg m "moonmaiden" --arg p "bongacams" --arg h "$MN_HLS" --arg r "main" \
+                          '{ref:$r, inputs:{model:$m, provider:$p, hls_url:$h}}')
+                        curl -s -X POST -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                          -H "Accept: application/vnd.github+json" \
+                          "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/record.yml/dispatches" \
+                          -d "$PAYLOAD_MN" 2>/dev/null >/dev/null && echo "  record dispatched"
+                      fi
                     else
-                      curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-                        -d "chat_id=${CHAT_ID}" --data-urlencode "text=🟢 moonmaiden online (${MN_VIEWERS} зр.)" 2>/dev/null >/dev/null
+                      echo "[$(date -u +%H:%M:%S)]   moonmaiden HLS unreachable — skip"
                     fi
                   else
-                    curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-                      -d "chat_id=${CHAT_ID}" --data-urlencode "text=🟢 moonmaiden online (${MN_VIEWERS} зр.)" 2>/dev/null >/dev/null
-                  fi
-                  # Dispatch record
-                  if [ -n "$MN_HLS" ] && [ -n "${GITHUB_TOKEN:-}" ]; then
-                    PAYLOAD_MN=$(jq -n --arg m "moonmaiden" --arg p "bongacams" --arg h "$MN_HLS" --arg r "main" \
-                      '{ref:$r, inputs:{model:$m, provider:$p, hls_url:$h}}')
-                    curl -s -X POST -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-                      -H "Accept: application/vnd.github+json" \
-                      "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/record.yml/dispatches" \
-                      -d "$PAYLOAD_MN" 2>/dev/null >/dev/null && echo "  record dispatched"
+                    echo "[$(date -u +%H:%M:%S)]   moonmaiden ONLINE but NO HLS URL — skip"
                   fi
                 fi
                 if [ "$CUR_MN" = "offline" ] && [ "$PREV_MN" = "online" ]; then
@@ -286,34 +290,38 @@ jobs:
                 echo "[$(date -u +%H:%M:%S)]   Maddy_May: prev=$PREV_MM cur=$CUR_MM"
 
                 if [ "$CUR_MM" = "online" ] && [ ! -f "$DISPATCH_FLAG_MM" ]; then
-                  echo "[$(date -u +%H:%M:%S)]   Maddy_May ONLINE — notify + dispatch record"
-                  touch "$DISPATCH_FLAG_MM"
                   if [ -n "$MM_URL" ]; then
-                    PREVIEW_FILE_MM=/tmp/recorder-state/preview_Maddy_May.jpg
-                    rm -f "$PREVIEW_FILE_MM"
-                    timeout 20 ffmpeg -y -i "$MM_URL" -frames:v 1 -q:v 3 -ss 2 -vf "scale=480:-1" "$PREVIEW_FILE_MM" 2>/dev/null || true
-                    if [ -s "$PREVIEW_FILE_MM" ]; then
-                      cp -f "$PREVIEW_FILE_MM" /tmp/recorder-state/last_frame.jpg
-                      bash ./state-store.sh "$PREVIEW_FILE_MM" "last_frame.jpg" "preview update" >/dev/null 2>&1 || true
-                      curl -s --max-time 15 "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
-                        -F "chat_id=${CHAT_ID}" -F "photo=@${PREVIEW_FILE_MM}" \
-                        -F "caption=🟢 Maddy_May online (MFC)" 2>/dev/null >/dev/null || true
+                    HLS_OK_MM=$(curl -sI --max-time 10 "$MM_URL" 2>/dev/null | head -1 | grep -c '200\|302' || echo 0)
+                    if [ "$HLS_OK_MM" -gt 0 ]; then
+                      echo "[$(date -u +%H:%M:%S)]   Maddy_May ONLINE (has HLS) — notify + dispatch record"
+                      touch "$DISPATCH_FLAG_MM"
+                      PREVIEW_FILE_MM=/tmp/recorder-state/preview_Maddy_May.jpg
+                      rm -f "$PREVIEW_FILE_MM"
+                      timeout 20 ffmpeg -y -i "$MM_URL" -frames:v 1 -q:v 3 -ss 2 -vf "scale=480:-1" "$PREVIEW_FILE_MM" 2>/dev/null || true
+                      if [ -s "$PREVIEW_FILE_MM" ]; then
+                        cp -f "$PREVIEW_FILE_MM" /tmp/recorder-state/last_frame.jpg
+                        bash ./state-store.sh "$PREVIEW_FILE_MM" "last_frame.jpg" "preview update" >/dev/null 2>&1 || true
+                        curl -s --max-time 15 "https://api.telegram.org/bot${BOT_TOKEN}/sendPhoto" \
+                          -F "chat_id=${CHAT_ID}" -F "photo=@${PREVIEW_FILE_MM}" \
+                          -F "caption=🟢 Maddy_May online (MFC)" 2>/dev/null >/dev/null || true
+                      else
+                        curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
+                          -d "chat_id=${CHAT_ID}" --data-urlencode "text=🟢 Maddy_May online (MFC)" 2>/dev/null >/dev/null
+                      fi
+                      # Dispatch record
+                      if [ -n "${GITHUB_TOKEN:-}" ]; then
+                        PAYLOAD_MM=$(jq -n --arg m "Maddy_May" --arg p "myfreecams" --arg h "$MM_URL" --arg r "main" \
+                          '{ref:$r, inputs:{model:$m, provider:$p, hls_url:$h}}')
+                        curl -s -X POST -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                          -H "Accept: application/vnd.github+json" \
+                          "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/record.yml/dispatches" \
+                          -d "$PAYLOAD_MM" 2>/dev/null >/dev/null && echo "  record dispatched"
+                      fi
                     else
-                      curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-                        -d "chat_id=${CHAT_ID}" --data-urlencode "text=🟢 Maddy_May online (MFC)" 2>/dev/null >/dev/null
+                      echo "[$(date -u +%H:%M:%S)]   Maddy_May HLS unreachable — skip"
                     fi
                   else
-                    curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-                      -d "chat_id=${CHAT_ID}" --data-urlencode "text=🟢 Maddy_May online (MFC)" 2>/dev/null >/dev/null
-                  fi
-                  # Dispatch record
-                  if [ -n "$MM_URL" ] && [ -n "${GITHUB_TOKEN:-}" ]; then
-                    PAYLOAD_MM=$(jq -n --arg m "Maddy_May" --arg p "myfreecams" --arg h "$MM_URL" --arg r "main" \
-                      '{ref:$r, inputs:{model:$m, provider:$p, hls_url:$h}}')
-                    curl -s -X POST -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-                      -H "Accept: application/vnd.github+json" \
-                      "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/record.yml/dispatches" \
-                      -d "$PAYLOAD_MM" 2>/dev/null >/dev/null && echo "  record dispatched"
+                    echo "[$(date -u +%H:%M:%S)]   Maddy_May ONLINE but NO HLS URL — skip"
                   fi
                 fi
                 if [ "$CUR_MM" = "offline" ] && [ "$PREV_MM" = "online" ]; then
