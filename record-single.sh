@@ -33,13 +33,32 @@ publish_frame() {
     fi
 }
 
+# v6.36: Validate HLS has actual video segments (not just header)
+check_hls_alive() {
+    local url="$1"
+    local playlist=$(curl -s --max-time 8 "$url" 2>/dev/null)
+    local segs=$(echo "$playlist" | grep -c '#EXTINF' 2>/dev/null || echo 0)
+    if [ "$segs" -gt 0 ]; then
+        return 0
+    fi
+    return 1
+}
+
 echo "[$(date -u +%H:%M:%S)] ${MODEL}: validating HLS URL..."
 HLS_STATUS=$(curl -sI --max-time 10 "${HLS_URL}" 2>/dev/null | head -1 | grep -c '200\|302' || echo 0)
 if [ "$HLS_STATUS" -eq 0 ]; then
     echo "[$(date -u +%H:%M:%S)] ${MODEL}: HLS URL unreachable — abort: ${HLS_URL:0:120}"
+    send_tg "⚠️ ${MODEL}: HLS недоступен"
     exit 0
 fi
-echo "[$(date -u +%H:%M:%S)] ${MODEL}: HLS URL OK, starting capture loop"
+
+# v6.36: Check segments before starting
+if ! check_hls_alive "${HLS_URL}"; then
+    echo "[$(date -u +%H:%M:%S)] ${MODEL}: HLS empty (0 segments) — stream not active"
+    send_tg "⚠️ ${MODEL}: онлайн, но поток пустой (нет сегментов)"
+    exit 0
+fi
+echo "[$(date -u +%H:%M:%S)] ${MODEL}: HLS OK with segments, starting capture loop"
 
 echo "recording" > "${STATE_DIR}/state_${MODEL}" 2>/dev/null || true
 mkdir -p "$WORK_DIR"
