@@ -1,6 +1,5 @@
 name: Record JustKatrin
 on:
-# v6.31.1 — schedule kick
   schedule:
     - cron: '*/2 * * * *'
   workflow_dispatch:
@@ -21,149 +20,92 @@ env:
 jobs:
   record:
     runs-on: ubuntu-22.04
-    timeout-minutes: 360
+    timeout-minutes: 14
     steps:
       - name: Install tools
         run: |
-          sudo apt-get update -qq && sudo apt-get install -y -qq curl jq ffmpeg 2>/dev/null
-          pip3 install --quiet --upgrade streamlink
-      - name: Check & Record
-        run: |
-          trap 'echo "[$(date -u +%H:%M:%S)] EXIT"' EXIT
-          # NO set -e — we handle errors manually
-          MODEL="JustKatrin"
-          MAX_DURATION=20400
-          WORK_DIR="/tmp/rec_${MODEL}"
-          mkdir -p "$WORK_DIR"
-          START=$(date +%s)
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq curl jq ffmpeg 2>&1 | tail -2
+          pip3 install --quiet --upgrade streamlink 2>&1 | tail -1
 
-          # === CHECK IF LIVE ===
-          DATA=$(curl -s --max-time 8 "https://go.xxxiijmp.com/api/models?modelsList=${MODEL}&strict=1" 2>/dev/null || echo '{"count":0}')
+      - name: Check & Record JustKatrin
+        id: rec
+        run: |
+          # Check if live with actual segments
+          DATA=$(curl -s --max-time 8 "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null || echo '{"count":0}')
           COUNT=$(echo "$DATA" | jq -r '.count // 0' 2>/dev/null)
-          
+
           if [ "$COUNT" = "0" ] || [ -z "$COUNT" ]; then
-            echo "[$(date -u +%H:%M:%S)] Not live (count=$COUNT)"
+            echo "[$(date -u +%H:%M:%S)] Not live"
+            echo "live=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
           HLS=$(echo "$DATA" | jq -r '.models[0].stream.url // ""' 2>/dev/null)
           VIEWERS=$(echo "$DATA" | jq -r '.models[0].viewersCount // 0' 2>/dev/null)
-          
+
           if [ -z "$HLS" ] || [ "$HLS" = "null" ]; then
-            echo "No HLS URL"
+            echo "No HLS"
+            echo "live=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          # Validate HLS
-          if ! curl -sIf --max-time 10 "$HLS" >/dev/null 2>&1; then
-            echo "HLS unreachable"
+          # v6.36: Verify HLS has actual video segments
+          PLAYLIST=$(curl -s --max-time 8 "$HLS" 2>/dev/null || echo "")
+          SEGS=$(echo "$PLAYLIST" | grep -c '#EXTINF' 2>/dev/null || echo 0)
+          if [ "$SEGS" -eq 0 ]; then
+            echo "HLS empty (0 segments)"
+            echo "live=false" >> $GITHUB_OUTPUT
             exit 0
           fi
 
-          echo "[$(date -u +%H:%M:%S)] LIVE! Viewers=$VIEWERS"
+          echo "[$(date -u +%H:%M:%S)] LIVE! viewers=$VIEWERS segs=$SEGS"
+          echo "live=true" >> $GITHUB_OUTPUT
+          echo "hls=$HLS" >> $GITHUB_OUTPUT
+          echo "viewers=$VIEWERS" >> $GITHUB_OUTPUT
 
-          # Notify
-          curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-            -d "chat_id=${CHAT_ID}" \
-            --data-urlencode "text=🟢 ${MODEL} online (${VIEWERS} зр.)" 2>/dev/null >/dev/null || true
+          # Record 10-min chunk (with -t for explicit duration)
+          OUTFILE="/tmp/jk_$(date +%s).mp4"
+          echo "Recording 10min chunk..."
+          timeout 605 streamlink --hls-live-edge 3 --retry-streams 2 --retry-max 2 --stdout "$HLS" best 2>/tmp/sl_err.log | \
+            timeout 605 ffmpeg -y -t 600 -i pipe:0 -c copy -movflags +faststart -f mp4 "$OUTFILE" 2>/dev/null || true
+          SIZE=$(stat -c%s "$OUTFILE" 2>/dev/null || echo 0)
+          echo "Chunk size: $SIZE bytes"
 
-          # === RECORD ===
-          CHUNK=0
-          TOTAL=0
-          NOTIFIED_START=false
-
-          while [ $(( $(date +%s) - START )) -lt $MAX_DURATION ]; do
-            OUTFILE="${WORK_DIR}/jk_$(printf '%03d' $CHUNK).mp4"
-            
-            CHUNK_DUR=600
-
-            # Record chunk (timeout exit 124 is NORMAL — we check file size instead)
-            OK=false
-            timeout ${CHUNK_DUR} streamlink --loglevel error --hls-live-edge 3 --retry-streams 2 --retry-max 1 --stdout "$HLS" best 2>/dev/null | \
-               timeout ${CHUNK_DUR} ffmpeg -y -i pipe:0 -c copy -movflags +faststart -f mp4 "$OUTFILE" 2>/dev/null || true
-            SIZE=$(stat -c%s "$OUTFILE" 2>/dev/null || echo 0)
-            if [ "$SIZE" -gt 4096 ]; then
-              OK=true
-            fi
-
-            # Fallback: ffmpeg direct
-            if [ "$OK" != "true" ]; then
-              rm -f "$OUTFILE"
-              timeout ${CHUNK_DUR} ffmpeg -y -reconnect 1 -reconnect_at_eof 1 -reconnect_streamed 1 \
-                -reconnect_delay_max 10 -i "$HLS" -c copy -movflags +faststart -f mp4 "$OUTFILE" 2>/dev/null || true
-              SIZE=$(stat -c%s "$OUTFILE" 2>/dev/null || echo 0)
-              if [ "$SIZE" -gt 4096 ]; then
-                OK=true
-              fi
-            fi
-
-            if [ "$OK" = "true" ]; then
-              SIZE=$(stat -c%s "$OUTFILE" 2>/dev/null || echo 0)
-              
-              if [ "$NOTIFIED_START" != "true" ]; then
-                curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-                  -d "chat_id=${CHAT_ID}" \
-                  --data-urlencode "text=📹 ${MODEL} запись началась" 2>/dev/null >/dev/null || true
-                NOTIFIED_START=true
-              fi
-
-              # Send to Telegram
-              if curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendVideo" \
-                -F "chat_id=${CHAT_ID}" \
-                -F "video=@${OUTFILE}" \
-                -F "supports_streaming=true" 2>/dev/null | grep -q '"ok":true'; then
-                TOTAL=$((TOTAL + SIZE))
-                echo "[$(date -u +%H:%M:%S)] chunk $CHUNK sent (${SIZE} bytes, total ${TOTAL} bytes)"
-                rm -f "$OUTFILE"
-                CHUNK=$((CHUNK + 1))
-              else
-                echo "[$(date -u +%H:%M:%S)] Telegram send failed"
-                rm -f "$OUTFILE"
-              fi
+          if [ "$SIZE" -gt 1024 ] && [ -f "$OUTFILE" ]; then
+            # Send to Telegram
+            if curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendVideo" \
+              -F "chat_id=${CHAT_ID}" \
+              -F "video=@${OUTFILE}" \
+              -F "supports_streaming=true" 2>/dev/null | grep -q '"ok":true'; then
+              echo "Sent! ($SIZE bytes)"
             else
-              rm -f "$OUTFILE"
-              echo "[$(date -u +%H:%M:%S)] capture failed, checking if still live..."
-              
-              # Check if model is still live
-              DATA2=$(curl -s --max-time 8 "https://go.xxxiijmp.com/api/models?modelsList=${MODEL}&strict=1" 2>/dev/null || echo '{"count":0}')
-              COUNT2=$(echo "$DATA2" | jq -r '.count // 0' 2>/dev/null)
-              
-              if [ "$COUNT2" = "0" ] || [ -z "$COUNT2" ]; then
-                echo "[$(date -u +%H:%M:%S)] Model offline, stopping"
-                break
-              fi
-              
-              # Update HLS URL (may have changed)
-              NEW_HLS=$(echo "$DATA2" | jq -r '.models[0].stream.url // ""' 2>/dev/null)
-              if [ -n "$NEW_HLS" ] && [ "$NEW_HLS" != "$HLS" ] && [ "$NEW_HLS" != "null" ]; then
-                HLS="$NEW_HLS"
-                echo "[$(date -u +%H:%M:%S)] HLS URL updated"
-              fi
-              
-              echo "[$(date -u +%H:%M:%S)] retrying in 5s..."
-              sleep 5
+              echo "Send failed"
             fi
-          done
-
-          TOTAL_MB=$(( TOTAL / 1048576 ))
-          TOTAL_MIN=$(( ($(date +%s) - START) / 60 ))
-
-          if [ "$NOTIFIED_START" = "true" ]; then
-            curl -s "https://api.telegram.org/bot${BOT_TOKEN}/sendMessage" \
-              -d "chat_id=${CHAT_ID}" \
-              --data-urlencode "text=🔴 ${MODEL} запись завершена — ${TOTAL_MB}MB за ${TOTAL_MIN}мин" 2>/dev/null >/dev/null || true
+            rm -f "$OUTFILE"
+          else
+            echo "Chunk too small or missing"
+            rm -f "$OUTFILE"
           fi
 
-          # Self re-dispatch: if still live, trigger self again
-          DATA3=$(curl -s --max-time 8 "https://go.xxxiijmp.com/api/models?modelsList=${MODEL}&strict=1" 2>/dev/null || echo '{"count":0}')
-          COUNT3=$(echo "$DATA3" | jq -r '.count // 0' 2>/dev/null)
-          if [ "$COUNT3" != "0" ] && [ -n "$COUNT3" ]; then
-            echo "[$(date -u +%H:%M:%S)] Still live, self-dispatching..."
-            curl -s -X POST \
-              -H "Authorization: Bearer ${GITHUB_TOKEN}" \
-              -H "Accept: application/vnd.github+json" \
-              "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/record-jk.yml/dispatches" \
-              -d '{"ref":"main"}' 2>/dev/null >/dev/null || true
+      - name: Self-dispatch if still live
+        if: steps.rec.outputs.live == 'true'
+        run: |
+          # Quick recheck and self-dispatch to continue chain
+          sleep 3
+          DATA2=$(curl -s --max-time 8 "https://go.xxxiijmp.com/api/models?modelsList=JustKatrin&strict=1" 2>/dev/null || echo '{"count":0}')
+          COUNT2=$(echo "$DATA2" | jq -r '.count // 0' 2>/dev/null)
+          if [ "$COUNT2" != "0" ] && [ -n "$COUNT2" ]; then
+            HLS2=$(echo "$DATA2" | jq -r '.models[0].stream.url // ""' 2>/dev/null)
+            PLAYLIST2=$(curl -s --max-time 8 "$HLS2" 2>/dev/null || echo "")
+            SEGS2=$(echo "$PLAYLIST2" | grep -c '#EXTINF' 2>/dev/null || echo 0)
+            if [ "$SEGS2" -gt 0 ]; then
+              echo "Still live, self-dispatching..."
+              curl -s -X POST \
+                -H "Authorization: Bearer ${GITHUB_TOKEN}" \
+                -H "Accept: application/vnd.github+json" \
+                "https://api.github.com/repos/${GITHUB_REPOSITORY}/actions/workflows/record-jk.yml/dispatches" \
+                -d '{"ref":"main"}' 2>/dev/null
+              echo "Self-dispatch sent"
+            fi
           fi
-
-          rm -rf "$WORK_DIR"
