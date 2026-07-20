@@ -1,0 +1,32 @@
+name: Keep Render Awake
+
+# Free tier spins down after ~15min idle. Ping /health every 10 min.
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: keepalive-render
+  cancel-in-progress: true
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping Render health
+        run: |
+          set +e
+          for i in 1 2 3; do
+            CODE=$(curl -s -o /tmp/h.txt -w "%{http_code}" --max-time 45 \
+              "https://auto-recorder-1w7r.onrender.com/health")
+            BODY=$(cat /tmp/h.txt 2>/dev/null | head -c 80)
+            echo "try=$i http=$CODE body=$BODY"
+            if [ "$CODE" = "200" ]; then
+              exit 0
+            fi
+            sleep 10
+          done
+          echo "WARN: health not 200 after 3 tries (cold start may still be wakening)"
+          exit 0
